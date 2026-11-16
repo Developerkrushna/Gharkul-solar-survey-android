@@ -1,0 +1,6 @@
+{
+  "name": "घरकुल सर्व्हे",
+  "description": "घरकुल सोलर सर्व्हे फील्ड एक्झिक्युटिव्ह अ‍ॅप (अहिल्यानगर आणि छत्रपती संभाजीनगर)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
