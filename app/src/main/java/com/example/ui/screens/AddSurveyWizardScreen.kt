@@ -55,6 +55,7 @@ fun AddSurveyWizardScreen(
   wizard: AddEditWizardState,
   villageNameMr: String,
   talukaNameMr: String,
+  districtNameMr: String,
   snackbarHostState: SnackbarHostState,
   onPreviousStep: () -> Unit,
   onNextStep: () -> Unit,
@@ -83,6 +84,7 @@ fun AddSurveyWizardScreen(
     isSizeValid: Boolean?,
     legibility: DocumentLegibility?,
     clearPhoto: Boolean,
+    queryNote: String?,
   ) -> Unit,
   onUpdateCompliance: ((DocumentComplianceChecks) -> DocumentComplianceChecks) -> Unit,
   onUpdateChecklist: ((ChecklistAnswers) -> ChecklistAnswers) -> Unit,
@@ -97,7 +99,7 @@ fun AddSurveyWizardScreen(
   val (headerTitle, headerSubtitle) =
     when (wizard.currentStep) {
       1 -> (if (wizard.editingSurveyId == null) "नवीन ग्राहक" else "ग्राहक संपादन") to "पायरी 1 / 3 · प्राथमिक व साईट माहिती"
-      2 -> "कागदपत्रे" to "पायरी 2 / 3 · फोटो (200-500 KB) आणि नाव"
+      2 -> "कागदपत्रे" to "पायरी 2 / 3 · कागदपत्रे, टीप व Note Cam"
       else -> "तपासणी आणि निकाल" to "पायरी 3 / 3 · ${wizard.beneficiaryName.ifBlank { "नवीन ग्राहक" }}"
     }
 
@@ -203,8 +205,10 @@ fun AddSurveyWizardScreen(
           2 ->
             WizardStep2Documents(
               wizard = wizard,
+              locationBreadcrumb = listOf(villageNameMr, talukaNameMr, districtNameMr).filter { it.isNotBlank() }.joinToString(" · "),
               onUpdateDocument = onUpdateDocument,
               onUpdateCompliance = onUpdateCompliance,
+              onUpdateSiteSurvey = onUpdateSiteSurvey,
               onShowMessage = onShowMessage,
             )
           else ->

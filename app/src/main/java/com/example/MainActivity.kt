@@ -1,5 +1,6 @@
 package com.example
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -10,12 +11,18 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material.icons.outlined.SwapHoriz
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -23,18 +30,24 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.model.AppScreen
+import com.example.model.InstallationReport
 import com.example.model.MainTab
 import com.example.ui.components.BrandTopBar
 import com.example.ui.components.DeleteCustomerConfirmationDialog
@@ -43,14 +56,21 @@ import com.example.ui.screens.AddSurveyWizardScreen
 import com.example.ui.screens.CustomerDetailSheet
 import com.example.ui.screens.CustomerListScreen
 import com.example.ui.screens.HomeDashboardScreen
+import com.example.ui.screens.InstallationDashboardScreen
+import com.example.ui.screens.InstallationFormScreen
 import com.example.ui.screens.LoginScreen
 import com.example.ui.screens.ProfileScreen
 import com.example.ui.screens.VillageSelectionScreen
 import com.example.ui.theme.BannerIceBlue
 import com.example.ui.theme.BorderSubtle
+import com.example.ui.theme.BrandCrimson
 import com.example.ui.theme.BrandNavy
+import com.example.ui.theme.CardWhite
 import com.example.ui.theme.GharkulSurveyTheme
+import com.example.ui.theme.SuccessGreenText
 import com.example.ui.theme.SurfaceCanvas
+import com.example.ui.theme.TextSecondary
+import com.example.util.InstallationPdfGenerator
 import com.example.viewmodel.SurveyAppViewModel
 
 class MainActivity : ComponentActivity() {
@@ -69,6 +89,8 @@ class MainActivity : ComponentActivity() {
 fun GharkulSurveyApp(viewModel: SurveyAppViewModel = viewModel()) {
   val uiState by viewModel.uiState.collectAsStateWithLifecycle()
   val snackbarHostState = remember { SnackbarHostState() }
+  val context = LocalContext.current
+  var justSavedReport by remember { mutableStateOf<InstallationReport?>(null) }
 
   LaunchedEffect(uiState.snackbarMessage) {
     val msg = uiState.snackbarMessage
@@ -90,6 +112,7 @@ fun GharkulSurveyApp(viewModel: SurveyAppViewModel = viewModel()) {
       wizard = uiState.wizard,
       villageNameMr = uiState.selectedVillage?.nameMr.orEmpty(),
       talukaNameMr = uiState.selectedTaluka?.nameMr.orEmpty(),
+      districtNameMr = uiState.selectedDistrict?.nameMr.orEmpty(),
       snackbarHostState = snackbarHostState,
       onPreviousStep = viewModel::previousWizardStep,
       onNextStep = viewModel::nextWizardStep,
@@ -112,9 +135,11 @@ fun GharkulSurveyApp(viewModel: SurveyAppViewModel = viewModel()) {
     when (uiState.currentScreen) {
       AppScreen.LOGIN -> {
         LoginScreen(
+          selectedRole = uiState.loginRole,
           email = uiState.loginEmail,
           password = uiState.loginPassword,
           errorMessage = uiState.loginError,
+          onSelectRole = viewModel::selectLoginRole,
           onEmailChange = viewModel::updateLoginEmail,
           onPasswordChange = viewModel::updateLoginPassword,
           onLoginClick = viewModel::submitLogin,
@@ -222,7 +247,6 @@ fun GharkulSurveyApp(viewModel: SurveyAppViewModel = viewModel()) {
                 ProfileScreen(
                   executive = uiState.executive,
                   villageBreadcrumb = villageBreadcrumb,
-                  reportBRows = uiState.reportBRows,
                   onChangeVillageClick = viewModel::openVillageSelectorFromDashboard,
                   onLogoutClick = viewModel::logout,
                 )
@@ -248,6 +272,108 @@ fun GharkulSurveyApp(viewModel: SurveyAppViewModel = viewModel()) {
             onDismiss = viewModel::dismissDeleteDialog,
           )
         }
+      }
+
+      AppScreen.INSTALLATION_DASHBOARD -> {
+        InstallationDashboardScreen(
+          activeTab = uiState.activeInstallationTab,
+          executive = uiState.installationExecutive,
+          approvedCat1Surveys = uiState.approvedCategory1Surveys,
+          installationReports = uiState.installationReports,
+          searchQuery = uiState.installationSearchQuery,
+          selectedFilter = uiState.installationFilter,
+          snackbarHostState = snackbarHostState,
+          onSelectTab = viewModel::selectInstallationTab,
+          onSearchChange = viewModel::updateInstallationSearch,
+          onFilterSelect = viewModel::selectInstallationFilter,
+          onStartFromSurvey = viewModel::startInstallationFromSurvey,
+          onStartManual = viewModel::startManualInstallationForm,
+          onEditReport = viewModel::openEditInstallationReport,
+          onShowMessage = viewModel::showMessage,
+          onLogoutClick = viewModel::logout,
+        )
+
+        val savedDialogReport = justSavedReport
+        if (savedDialogReport != null) {
+          com.example.ui.screens.ShareInstallationPdfOptionDialog(
+            report = savedDialogReport,
+            isPostSave = true,
+            onDismiss = { justSavedReport = null },
+            onShareWithImages = {
+              val target = savedDialogReport
+              justSavedReport = null
+              val uri = InstallationPdfGenerator.generateCertificatePdf(context, target, includeImages = true)
+              if (uri != null) {
+                val shareIntent =
+                  Intent(Intent.ACTION_SEND).apply {
+                    type = "application/pdf"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    putExtra(
+                      Intent.EXTRA_SUBJECT,
+                      "Installation Certificate - ${target.consumerName} (${target.consumerNo})",
+                    )
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                  }
+                context.startActivity(
+                  Intent.createChooser(shareIntent, "Share Installation Certificate PDF")
+                )
+              } else {
+                viewModel.showMessage("Could not generate PDF. Please try again.")
+              }
+            },
+            onShareWithoutImages = {
+              val target = savedDialogReport
+              justSavedReport = null
+              val uri = InstallationPdfGenerator.generateCertificatePdf(context, target, includeImages = false)
+              if (uri != null) {
+                val shareIntent =
+                  Intent(Intent.ACTION_SEND).apply {
+                    type = "application/pdf"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    putExtra(
+                      Intent.EXTRA_SUBJECT,
+                      "Installation Certificate - ${target.consumerName} (${target.consumerNo})",
+                    )
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                  }
+                context.startActivity(
+                  Intent.createChooser(shareIntent, "Share Installation Certificate PDF")
+                )
+              } else {
+                viewModel.showMessage("Could not generate PDF. Please try again.")
+              }
+            },
+          )
+        }
+      }
+
+      AppScreen.INSTALLATION_FORM -> {
+        InstallationFormScreen(
+          form = uiState.installationForm,
+          snackbarHostState = snackbarHostState,
+          onSetPage = viewModel::setInstallationFormPage,
+          onNextPage = viewModel::nextInstallationFormPage,
+          onPreviousPage = viewModel::previousInstallationFormPage,
+          onUpdateHeader = viewModel::updateInstallationHeader,
+          onUpdateProductRow = viewModel::updateInstallationProductRow,
+          onUpdateSignOff = viewModel::updateInstallationSignOff,
+          onUpdateInverterSerial = viewModel::updateInverterSerial,
+          onUpdateMeterSerial = viewModel::updateGenerationMeterSerial,
+          onUpdatePanelSerial = viewModel::updatePanelSerial,
+          onAddPanel = viewModel::addPanelSerialRow,
+          onRemovePanel = viewModel::removePanelSerialRow,
+          onAddPhotoSlot = viewModel::addInstallationPhotoSlot,
+          onRemovePhotoSlot = viewModel::removeInstallationPhotoSlot,
+          onUpdatePhotoCaption = viewModel::updateInstallationPhotoCaption,
+          onUpdatePhotoCapture = viewModel::updateInstallationPhotoCapture,
+          onShowMessage = viewModel::showMessage,
+          onSubmitCertificate = {
+            val saved = viewModel.saveInstallationReport()
+            if (saved != null) {
+              justSavedReport = saved
+            }
+          },
+        )
       }
     }
   }

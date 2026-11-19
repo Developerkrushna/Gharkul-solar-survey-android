@@ -17,18 +17,30 @@ import com.example.model.DocumentLegibility
 import com.example.model.DocumentType
 import com.example.model.ExecutiveUser
 import com.example.model.HouseType
+import com.example.model.InstallationPhotoItem
+import com.example.model.InstallationProductRow
+import com.example.model.InstallationQueueFilter
+import com.example.model.InstallationReport
+import com.example.model.InstallationTab
+import com.example.model.LoginRole
 import com.example.model.MainTab
 import com.example.model.MaterialAndOfficeDetails
 import com.example.model.MeterInfo
 import com.example.model.OverallStatus
+import com.example.model.PanelSerialEntry
 import com.example.model.PendingActionItem
 import com.example.model.ReportBRow
+import com.example.model.SerialVerificationField
 import com.example.model.SiteSurveyDetails
 import com.example.model.SolarCapacity
 import com.example.model.SurveyCategory
 import com.example.model.Taluka
 import com.example.model.Village
 import com.example.model.VillageStats
+import com.example.model.defaultInstallationDate
+import com.example.model.defaultInstallationPhotos
+import com.example.model.defaultInstallationProductRows
+import com.example.model.defaultPanelSerialEntries
 import com.example.util.ImageCompressionUtil
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -42,7 +54,6 @@ enum class CustomerStatusFilter(val labelMr: String) {
   ALL("सर्व"),
   READY("तयार"),
   PENDING_CUSTOMER("ग्राहक बाकी"),
-  PENDING_COMPANY("कंपनी बाकी"),
 }
 
 data class AddEditWizardState(
@@ -88,9 +99,36 @@ private fun defaultTodayDateString(): String {
 private fun defaultDocumentMap(): Map<DocumentType, DocumentEntry> =
   DocumentType.entries.associateWith { DocumentEntry(type = it) }
 
+data class InstallationFormState(
+  val editingReportId: String? = null,
+  val linkedSurveyId: String? = null,
+  val villageName: String = "",
+  val currentPage: Int = 1, // 1 = Fill Form, 2 = Serial Numbers, 3 = After Installation NoteCam Geo Images
+  val consumerNo: String = "",
+  val installationDate: String = defaultInstallationDate(),
+  val consumerName: String = "",
+  val mobileNo: String = "",
+  val systemCapacity: String = "1 KW",
+  val systemType: String = "ONGRID",
+  val products: List<InstallationProductRow> = defaultInstallationProductRows(),
+  val installerName: String = "Vikram Kulkarni",
+  val installerSignatureStrokes: List<List<Pair<Float, Float>>> = emptyList(),
+  val accountantName: String = "",
+  val managerName: String = "",
+  val supervisorName: String = "",
+  val customerSignatureStrokes: List<List<Pair<Float, Float>>> = emptyList(),
+  val inverterSerial: SerialVerificationField = SerialVerificationField(),
+  val generationMeterSerial: SerialVerificationField = SerialVerificationField(),
+  val panelSerials: List<PanelSerialEntry> = defaultPanelSerialEntries(),
+  val afterInstallationPhotos: List<InstallationPhotoItem> = defaultInstallationPhotos(),
+  val validationError: String? = null,
+)
+
 data class SurveyAppUiState(
+  val loginRole: LoginRole = LoginRole.SURVEY_EXECUTIVE,
   val currentScreen: AppScreen = AppScreen.LOGIN,
   val activeTab: MainTab = MainTab.HOME,
+  val activeInstallationTab: InstallationTab = InstallationTab.HOME,
   val executive: ExecutiveUser =
     ExecutiveUser(
       "रमेश कुलकर्णी",
@@ -98,6 +136,14 @@ data class SurveyAppUiState(
       "ramesh.k@gharkulsolar.in",
       "9823011223",
       "फील्ड एक्झिक्युटिव्ह",
+    ),
+  val installationExecutive: ExecutiveUser =
+    ExecutiveUser(
+      "Vikram Kulkarni",
+      "Vikram",
+      "installer@reflectionmedias.in",
+      "91300028122",
+      "Solar Installation Executive",
     ),
   val loginEmail: String = "ramesh.k@gharkulsolar.in",
   val loginPassword: String = "123456",
@@ -118,6 +164,11 @@ data class SurveyAppUiState(
   val selectedDetailSurvey: CustomerSurvey? = null,
   val pendingDeleteSurvey: CustomerSurvey? = null,
   val wizard: AddEditWizardState = AddEditWizardState(),
+  val approvedCategory1Surveys: List<CustomerSurvey> = emptyList(),
+  val installationReports: List<InstallationReport> = emptyList(),
+  val installationSearchQuery: String = "",
+  val installationFilter: InstallationQueueFilter = InstallationQueueFilter.ALL,
+  val installationForm: InstallationFormState = InstallationFormState(),
   val snackbarMessage: String? = null,
 )
 
@@ -140,14 +191,33 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
     _uiState.update {
       it.copy(
         executive = surveyRepository.getExecutive(),
+        installationExecutive = surveyRepository.getInstallationExecutive(),
         districts = districts,
         selectedDistrict = defaultDistrict,
         selectedTaluka = defaultTaluka,
         selectedVillage = defaultVillage,
         allSurveys = surveyRepository.surveys.value,
+        installationReports = surveyRepository.installationReports.value,
       )
     }
     recomputeDerivedCollections()
+  }
+
+  fun selectLoginRole(role: LoginRole) {
+    _uiState.update { state ->
+      if (state.loginRole == role) return@update state
+      val nextEmail =
+        when (role) {
+          LoginRole.SURVEY_EXECUTIVE -> state.executive.email
+          LoginRole.SOLAR_INSTALLATION -> state.installationExecutive.email
+        }
+      state.copy(
+        loginRole = role,
+        loginEmail = nextEmail,
+        loginPassword = if (state.loginPassword.isBlank()) "123456" else state.loginPassword,
+        loginError = null,
+      )
+    }
   }
 
   fun updateLoginEmail(email: String) {
@@ -160,24 +230,52 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
 
   fun submitLogin() {
     val state = _uiState.value
+    val isInstallation = state.loginRole == LoginRole.SOLAR_INSTALLATION
     if (state.loginEmail.isBlank() || !state.loginEmail.contains("@")) {
-      _uiState.update { it.copy(loginError = "कृपया वैध ईमेल पत्ता प्रविष्ट करा.") }
+      _uiState.update {
+        it.copy(
+          loginError =
+            if (isInstallation) "Please enter a valid email address."
+            else "कृपया वैध ईमेल पत्ता प्रविष्ट करा."
+        )
+      }
       return
     }
     if (state.loginPassword.length < 4) {
-      _uiState.update { it.copy(loginError = "कृपया किमान ४ अंकी पासवर्ड टाका.") }
+      _uiState.update {
+        it.copy(
+          loginError =
+            if (isInstallation) "Please enter at least a 4-character password."
+            else "कृपया किमान ४ अंकी पासवर्ड टाका."
+        )
+      }
       return
     }
-    _uiState.update { it.copy(loginError = null, currentScreen = AppScreen.VILLAGE_SELECT) }
+    val nextScreen =
+      if (isInstallation) AppScreen.INSTALLATION_DASHBOARD else AppScreen.VILLAGE_SELECT
+    _uiState.update {
+      it.copy(
+        loginError = null,
+        currentScreen = nextScreen,
+        activeInstallationTab = InstallationTab.HOME,
+      )
+    }
   }
 
   fun logout() {
-    _uiState.update {
-      it.copy(
+    _uiState.update { state ->
+      val defaultEmail =
+        if (state.loginRole == LoginRole.SOLAR_INSTALLATION) state.installationExecutive.email
+        else state.executive.email
+      state.copy(
         currentScreen = AppScreen.LOGIN,
         activeTab = MainTab.HOME,
+        activeInstallationTab = InstallationTab.HOME,
+        loginEmail = defaultEmail,
+        loginError = null,
         selectedDetailSurvey = null,
         wizard = AddEditWizardState(),
+        installationForm = InstallationFormState(),
       )
     }
   }
@@ -386,38 +484,32 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
       _uiState.update { it.copy(wizard = w.copy(currentStep = 2, validationError = null)) }
       recalculateWizardRules()
     } else if (w.currentStep == 2) {
-      val invalidSizeDoc =
-        w.documents.values.firstOrNull { entry ->
-          entry.photoUri != null &&
-            entry.photoSizeKb != null &&
-            entry.photoSizeKb !in ImageCompressionUtil.MIN_TARGET_KB..ImageCompressionUtil.MAX_TARGET_KB
-        }
-      if (invalidSizeDoc != null) {
-        _uiState.update {
-          it.copy(
-            wizard =
-              w.copy(
-                validationError =
-                  "${invalidSizeDoc.type.labelMr} फोटोचा आकार ${invalidSizeDoc.photoSizeKb} KB आहे. प्रत्येक फोटो 200 ते 500 KB दरम्यान असणे आवश्यक आहे."
-              )
-          )
-        }
-        return
-      }
       _uiState.update { it.copy(wizard = w.copy(currentStep = 3, validationError = null)) }
       recalculateWizardRules()
     }
   }
 
+  private val emailRegex = Regex("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$")
+
   private fun validateStep1(w: AddEditWizardState): String? {
     if (w.surveyDate.isBlank()) return "कृपया सर्व्हे दिनांक निवडा (* अनिवार्य)."
     if (w.beneficiaryName.isBlank()) return "कृपया घरकुलावरील नाव (मालकाचे नाव) टाका (* अनिवार्य)."
-    if (w.mobile.filter { it.isDigit() }.length < 10) return "कृपया १० अंकी मोबाईल नंबर टाका (* अनिवार्य)."
-    if (w.emailId.isBlank() || !w.emailId.contains("@")) return "कृपया वैध ई-मेल आयडी टाका (* अनिवार्य)."
+    val mobileDigits = w.mobile.filter { it.isDigit() }
+    if (mobileDigits.length != 10) return "कृपया बरोबर १० अंकी मोबाईल नंबर टाका (* अनिवार्य)."
+    val trimmedEmail = w.emailId.trim()
+    if (trimmedEmail.isBlank() || !emailRegex.matches(trimmedEmail)) {
+      return "कृपया वैध ई-मेल आयडी टाका (उदा. name@gmail.com) (* अनिवार्य)."
+    }
     if (w.meterInfo.isPoleNearbyForNewConn == null) return "कृपया 'नवीन कनेक्शन घेण्यासाठी पोल जवळ आहे का?' निवडा (* अनिवार्य)."
     if (w.meterInfo.interestedInNewConnection == null) return "कृपया 'नवीन कनेक्शन घेण्यासाठी इच्छुक आहे का?' निवडा (* अनिवार्य)."
-    if (w.meterInfo.hasMeter && !w.meterInfo.sameAsBeneficiary && w.meterInfo.meterHolderName.isBlank()) {
-      return "कृपया मीटर धारकाचे नाव टाका (* अनिवार्य)."
+    if (w.meterInfo.hasMeter) {
+      val consumerDigits = w.meterInfo.consumerNumber.trim()
+      if (consumerDigits.isNotEmpty() && consumerDigits.length != 12) {
+        return "ग्राहक क्रमांक भरल्यास बरोबर १२ अंकी असणे आवश्यक आहे."
+      }
+      if (!w.meterInfo.sameAsBeneficiary && w.meterInfo.meterHolderName.isBlank()) {
+        return "कृपया मीटर धारकाचे नाव टाका (* अनिवार्य)."
+      }
     }
     if (w.siteSurveyDetails.roofType == null) return "कृपया छताचा प्रकार निवडा (* अनिवार्य)."
     if (w.siteSurveyDetails.hasSolarPanelSpace100SqFt == null) {
@@ -537,6 +629,7 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
     isSizeValid: Boolean? = null,
     legibility: DocumentLegibility? = null,
     clearPhoto: Boolean = false,
+    queryNote: String? = null,
   ) {
     _uiState.update { state ->
       val cur = state.wizard
@@ -544,20 +637,15 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
       val nextPrintedName = printedName ?: oldEntry.printedName
       val nextPhotoUri = if (clearPhoto) null else (photoUri ?: oldEntry.photoUri)
       val nextPhotoKb = if (clearPhoto) null else (photoSizeKb ?: oldEntry.photoSizeKb)
-      val nextSizeValid =
-        when {
-          clearPhoto -> true
-          isSizeValid != null -> isSizeValid
-          nextPhotoKb != null -> nextPhotoKb in ImageCompressionUtil.MIN_TARGET_KB..ImageCompressionUtil.MAX_TARGET_KB
-          else -> oldEntry.isSizeValid
-        }
+      val nextSizeValid = isSizeValid ?: true
       val nextLegibility =
         when {
           legibility != null -> legibility
-          photoUri != null && oldEntry.legibility == DocumentLegibility.MISSING -> DocumentLegibility.CLEAR
+          photoUri != null -> DocumentLegibility.CLEAR
           clearPhoto -> DocumentLegibility.MISSING
           else -> oldEntry.legibility
         }
+      val nextQueryNote = queryNote ?: oldEntry.queryNote
       val refName =
         cur.documents[DocumentType.AADHAAR]?.printedName?.ifBlank { cur.beneficiaryName }
           ?: cur.beneficiaryName
@@ -577,6 +665,7 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
               isSizeValid = nextSizeValid,
               legibility = nextLegibility,
               matchResult = matchRes,
+              queryNote = nextQueryNote,
             ),
           )
         }
@@ -624,12 +713,6 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
     val taluka = state.selectedTaluka ?: return
     val village = state.selectedVillage ?: return
 
-    if (w.overrideCategory != null && w.overrideCategory != w.suggestedCategory && w.overrideReason.isBlank()) {
-      _uiState.update {
-        it.copy(wizard = w.copy(validationError = "श्रेणी बदलल्यास कारण लिहिणे आवश्यक आहे."))
-      }
-      return
-    }
     if (w.materialAndOfficeDetails.surveyorName.isBlank()) {
       _uiState.update {
         it.copy(wizard = w.copy(validationError = "कृपया सर्व्हे करणाऱ्या व्यक्तीचे नाव लिहा."))
@@ -637,7 +720,7 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
       return
     }
 
-    val finalCategory = w.effectiveCategory
+    val finalCategory = w.suggestedCategory
     val pending =
       SurveyRuleEngine.computePendingActions(
         category = finalCategory,
@@ -787,7 +870,6 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
               CustomerStatusFilter.ALL -> true
               CustomerStatusFilter.READY -> s.overallStatus == OverallStatus.READY
               CustomerStatusFilter.PENDING_CUSTOMER -> s.overallStatus == OverallStatus.PENDING_CUSTOMER
-              CustomerStatusFilter.PENDING_COMPANY -> s.overallStatus == OverallStatus.PENDING_COMPANY
             }
           matchesQuery && matchesCategory && matchesStatus
         }
@@ -805,14 +887,527 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
         )
 
       val reportRows = buildReportBRows(villageSurveys)
+      val approvedCat1 =
+        state.allSurveys.filter {
+          it.finalCategory == SurveyCategory.CATEGORY_1 && it.overallStatus == OverallStatus.READY
+        }
 
       state.copy(
         activeVillageSurveys = homeFiltered,
         filteredListSurveys = listFiltered,
         villageStats = stats,
         reportBRows = reportRows,
+        approvedCategory1Surveys = approvedCat1,
+        installationReports = surveyRepository.installationReports.value,
       )
     }
+  }
+
+  // ---- Solar Installation Workflow Actions (English Only) ----
+
+  fun selectInstallationTab(tab: InstallationTab) {
+    _uiState.update { it.copy(activeInstallationTab = tab) }
+  }
+
+  fun updateInstallationSearch(query: String) {
+    _uiState.update { it.copy(installationSearchQuery = query) }
+  }
+
+  fun selectInstallationFilter(filter: InstallationQueueFilter) {
+    _uiState.update { it.copy(installationFilter = filter) }
+  }
+
+  fun startInstallationFromSurvey(survey: CustomerSurvey) {
+    val existing = _uiState.value.installationReports.firstOrNull { it.linkedSurveyId == survey.id }
+    if (existing != null) {
+      openEditInstallationReport(existing)
+      return
+    }
+    val installerName = _uiState.value.installationExecutive.nameMr
+    _uiState.update {
+      it.copy(
+        currentScreen = AppScreen.INSTALLATION_FORM,
+        installationForm =
+          InstallationFormState(
+            linkedSurveyId = survey.id,
+            villageName = survey.villageNameMr,
+            currentPage = 1,
+            consumerNo = survey.meterInfo.consumerNumber,
+            installationDate = defaultInstallationDate(),
+            consumerName = survey.beneficiaryName,
+            mobileNo = survey.mobile,
+            systemCapacity = "1 KW",
+            systemType = "ONGRID",
+            products = defaultInstallationProductRows(),
+            installerName = installerName,
+            panelSerials = defaultPanelSerialEntries(),
+            afterInstallationPhotos = defaultInstallationPhotos(),
+          ),
+      )
+    }
+  }
+
+  fun startManualInstallationForm() {
+    val installerName = _uiState.value.installationExecutive.nameMr
+    _uiState.update {
+      it.copy(
+        currentScreen = AppScreen.INSTALLATION_FORM,
+        installationForm =
+          InstallationFormState(
+            linkedSurveyId = null,
+            villageName = "Manual Entry",
+            currentPage = 1,
+            installationDate = defaultInstallationDate(),
+            systemCapacity = "1 KW",
+            systemType = "ONGRID",
+            products = defaultInstallationProductRows(),
+            installerName = installerName,
+            panelSerials = defaultPanelSerialEntries(),
+            afterInstallationPhotos = defaultInstallationPhotos(),
+          ),
+      )
+    }
+  }
+
+  fun openEditInstallationReport(report: InstallationReport) {
+    _uiState.update {
+      it.copy(
+        currentScreen = AppScreen.INSTALLATION_FORM,
+        installationForm =
+          InstallationFormState(
+            editingReportId = report.id,
+            linkedSurveyId = report.linkedSurveyId,
+            villageName = report.villageName,
+            currentPage = 1,
+            consumerNo = report.consumerNo,
+            installationDate = report.installationDate,
+            consumerName = report.consumerName,
+            mobileNo = report.mobileNo,
+            systemCapacity = report.systemCapacity,
+            systemType = report.systemType,
+            products = report.products,
+            installerName = report.installerName,
+            installerSignatureStrokes = report.installerSignatureStrokes,
+            accountantName = report.accountantName,
+            managerName = report.managerName,
+            supervisorName = report.supervisorName,
+            customerSignatureStrokes = report.customerSignatureStrokes,
+            inverterSerial = report.inverterSerial,
+            generationMeterSerial = report.generationMeterSerial,
+            panelSerials = report.panelSerials.ifEmpty { defaultPanelSerialEntries() },
+            afterInstallationPhotos = report.afterInstallationPhotos.ifEmpty { defaultInstallationPhotos() },
+          ),
+      )
+    }
+  }
+
+  fun closeInstallationForm() {
+    _uiState.update {
+      it.copy(
+        currentScreen = AppScreen.INSTALLATION_DASHBOARD,
+        installationForm = InstallationFormState(),
+      )
+    }
+  }
+
+  fun setInstallationFormPage(page: Int) {
+    _uiState.update {
+      it.copy(
+        installationForm = it.installationForm.copy(
+          currentPage = page.coerceIn(1, 3),
+          validationError = null,
+        )
+      )
+    }
+  }
+
+  fun nextInstallationFormPage() {
+    val form = _uiState.value.installationForm
+    when (form.currentPage) {
+      1 -> {
+        val part1Error = validateInstallationPart1(form)
+        if (part1Error != null) {
+          _uiState.update { it.copy(installationForm = form.copy(validationError = part1Error)) }
+          return
+        }
+        _uiState.update {
+          it.copy(installationForm = form.copy(currentPage = 2, validationError = null))
+        }
+      }
+      2 -> {
+        val part2Error = validateInstallationPart2(form)
+        if (part2Error != null) {
+          _uiState.update { it.copy(installationForm = form.copy(validationError = part2Error)) }
+          return
+        }
+        _uiState.update {
+          it.copy(installationForm = form.copy(currentPage = 3, validationError = null))
+        }
+      }
+    }
+  }
+
+  fun previousInstallationFormPage() {
+    val form = _uiState.value.installationForm
+    if (form.currentPage > 1) {
+      _uiState.update {
+        it.copy(installationForm = form.copy(currentPage = form.currentPage - 1, validationError = null))
+      }
+    } else {
+      closeInstallationForm()
+    }
+  }
+
+  fun updateInstallationHeader(
+    consumerNo: String? = null,
+    installationDate: String? = null,
+    consumerName: String? = null,
+    mobileNo: String? = null,
+    systemCapacity: String? = null,
+    systemType: String? = null,
+    villageName: String? = null,
+  ) {
+    _uiState.update { state ->
+      val f = state.installationForm
+      state.copy(
+        installationForm =
+          f.copy(
+            consumerNo = consumerNo ?: f.consumerNo,
+            installationDate = installationDate ?: f.installationDate,
+            consumerName = consumerName ?: f.consumerName,
+            mobileNo = mobileNo ?: f.mobileNo,
+            systemCapacity = systemCapacity ?: f.systemCapacity,
+            systemType = systemType ?: f.systemType,
+            villageName = villageName ?: f.villageName,
+            validationError = null,
+          )
+      )
+    }
+  }
+
+  fun updateInstallationProductRow(
+    rowId: String,
+    company: String? = null,
+    size: String? = null,
+    capacity: String? = null,
+    qty: String? = null,
+  ) {
+    _uiState.update { state ->
+      val f = state.installationForm
+      val updatedProducts =
+        f.products.map { row ->
+          if (row.rowId == rowId) {
+            row.copy(
+              company = company ?: row.company,
+              size = size ?: row.size,
+              capacity = capacity ?: row.capacity,
+              qty = qty ?: row.qty,
+            )
+          } else {
+            row
+          }
+        }
+      state.copy(
+        installationForm = f.copy(products = updatedProducts, validationError = null)
+      )
+    }
+  }
+
+  fun updateInstallationSignOff(
+    installerName: String? = null,
+    installerSignatureStrokes: List<List<Pair<Float, Float>>>? = null,
+    accountantName: String? = null,
+    managerName: String? = null,
+    supervisorName: String? = null,
+    customerSignatureStrokes: List<List<Pair<Float, Float>>>? = null,
+  ) {
+    _uiState.update { state ->
+      val f = state.installationForm
+      state.copy(
+        installationForm =
+          f.copy(
+            installerName = installerName ?: f.installerName,
+            installerSignatureStrokes = installerSignatureStrokes ?: f.installerSignatureStrokes,
+            accountantName = accountantName ?: f.accountantName,
+            managerName = managerName ?: f.managerName,
+            supervisorName = supervisorName ?: f.supervisorName,
+            customerSignatureStrokes = customerSignatureStrokes ?: f.customerSignatureStrokes,
+            validationError = null,
+          )
+      )
+    }
+  }
+
+  fun updateInverterSerial(primary: String? = null, confirm: String? = null) {
+    _uiState.update { state ->
+      val f = state.installationForm
+      val cur = f.inverterSerial
+      state.copy(
+        installationForm =
+          f.copy(
+            inverterSerial =
+              cur.copy(
+                primaryValue = primary ?: cur.primaryValue,
+                confirmValue = confirm ?: cur.confirmValue,
+              ),
+            validationError = null,
+          )
+      )
+    }
+  }
+
+  fun updateGenerationMeterSerial(primary: String? = null, confirm: String? = null) {
+    _uiState.update { state ->
+      val f = state.installationForm
+      val cur = f.generationMeterSerial
+      state.copy(
+        installationForm =
+          f.copy(
+            generationMeterSerial =
+              cur.copy(
+                primaryValue = primary ?: cur.primaryValue,
+                confirmValue = confirm ?: cur.confirmValue,
+              ),
+            validationError = null,
+          )
+      )
+    }
+  }
+
+  fun updatePanelSerial(panelId: String, primary: String? = null, confirm: String? = null) {
+    _uiState.update { state ->
+      val f = state.installationForm
+      val updated =
+        f.panelSerials.map { panel ->
+          if (panel.id == panelId) {
+            panel.copy(
+              serial =
+                panel.serial.copy(
+                  primaryValue = primary ?: panel.serial.primaryValue,
+                  confirmValue = confirm ?: panel.serial.confirmValue,
+                )
+            )
+          } else {
+            panel
+          }
+        }
+      state.copy(installationForm = f.copy(panelSerials = updated, validationError = null))
+    }
+  }
+
+  fun addPanelSerialRow() {
+    _uiState.update { state ->
+      val f = state.installationForm
+      val nextIndex = f.panelSerials.size + 1
+      val newEntry = PanelSerialEntry(id = "panel_${nextIndex}_${System.currentTimeMillis()}")
+      state.copy(
+        installationForm =
+          f.copy(
+            panelSerials = f.panelSerials + newEntry,
+            validationError = null,
+          )
+      )
+    }
+  }
+
+  fun removePanelSerialRow(panelId: String) {
+    _uiState.update { state ->
+      val f = state.installationForm
+      if (f.panelSerials.size <= 2) return@update state
+      state.copy(
+        installationForm =
+          f.copy(
+            panelSerials = f.panelSerials.filterNot { it.id == panelId },
+            validationError = null,
+          )
+      )
+    }
+  }
+
+  private fun validateInstallationPart1(form: InstallationFormState): String? {
+    if (form.consumerNo.isBlank()) {
+      return "Please enter Consumer No. (Light Bill No)."
+    }
+    if (form.installationDate.isBlank()) {
+      return "Please enter or select the Installation Date."
+    }
+    if (form.consumerName.isBlank()) {
+      return "Please enter the Consumer Name."
+    }
+    val digits = form.mobileNo.filter { it.isDigit() }
+    if (digits.length != 10) {
+      return "Please enter a valid 10-digit Mobile No."
+    }
+    if (form.systemCapacity.isBlank() || form.systemType.isBlank()) {
+      return "Please enter System Capacity and System Type."
+    }
+    val missingRequiredQty = form.products.firstOrNull { it.isQtyRequired && it.qty.isBlank() }
+    if (missingRequiredQty != null) {
+      return "Please enter QTY for ${missingRequiredQty.productModel}."
+    }
+    if (form.installerName.isBlank()) {
+      return "Please enter the Installer Name."
+    }
+    if (form.installerSignatureStrokes.isEmpty()) {
+      return "Please capture the Installer Signature."
+    }
+    if (form.customerSignatureStrokes.isEmpty()) {
+      return "Please capture the Customer Sign and Stamp."
+    }
+    return null
+  }
+
+  private fun validateInstallationPart2(form: InstallationFormState): String? {
+    if (!form.inverterSerial.isFilled) {
+      return "Please enter and re-enter the Invertor Serial Number."
+    }
+    if (!form.inverterSerial.isMatch) {
+      return "Invertor Serial Number entries do not match. Please verify both fields."
+    }
+    if (!form.generationMeterSerial.isFilled) {
+      return "Please enter and re-enter the Generation Meter Serial Number."
+    }
+    if (!form.generationMeterSerial.isMatch) {
+      return "Generation Meter Serial Number entries do not match. Please verify both fields."
+    }
+    if (form.panelSerials.size < 2) {
+      return "At least 2 Panel Serial Numbers are required."
+    }
+    form.panelSerials.forEachIndexed { idx, panel ->
+      val label = "Panel ${idx + 1} Serial Number"
+      if (!panel.serial.isFilled) {
+        return "Please enter and re-enter $label."
+      }
+      if (!panel.serial.isMatch) {
+        return "$label entries do not match. Please verify both fields."
+      }
+    }
+    return null
+  }
+
+  fun addInstallationPhotoSlot() {
+    _uiState.update { state ->
+      val f = state.installationForm
+      val nextIdx = f.afterInstallationPhotos.size + 1
+      val newSlot =
+        InstallationPhotoItem(
+          id = "site_photo_${nextIdx}_${System.currentTimeMillis()}",
+          caption = "After Installation Photo $nextIdx",
+        )
+      state.copy(
+        installationForm =
+          f.copy(
+            afterInstallationPhotos = f.afterInstallationPhotos + newSlot,
+            validationError = null,
+          )
+      )
+    }
+  }
+
+  fun removeInstallationPhotoSlot(photoId: String) {
+    _uiState.update { state ->
+      val f = state.installationForm
+      if (f.afterInstallationPhotos.size <= 1) return@update state
+      state.copy(
+        installationForm =
+          f.copy(
+            afterInstallationPhotos = f.afterInstallationPhotos.filterNot { it.id == photoId },
+            validationError = null,
+          )
+      )
+    }
+  }
+
+  fun updateInstallationPhotoCaption(photoId: String, caption: String) {
+    _uiState.update { state ->
+      val f = state.installationForm
+      val updated =
+        f.afterInstallationPhotos.map { item ->
+          if (item.id == photoId) item.copy(caption = caption) else item
+        }
+      state.copy(installationForm = f.copy(afterInstallationPhotos = updated))
+    }
+  }
+
+  fun updateInstallationPhotoCapture(
+    photoId: String,
+    photoUri: String?,
+    photoSizeKb: Int?,
+    geoInfo: String,
+    isCameraGeoStamped: Boolean,
+  ) {
+    _uiState.update { state ->
+      val f = state.installationForm
+      val updated =
+        f.afterInstallationPhotos.map { item ->
+          if (item.id == photoId) {
+            item.copy(
+              photoUri = photoUri,
+              photoSizeKb = photoSizeKb,
+              geoInfo = geoInfo,
+              isCameraGeoStamped = isCameraGeoStamped,
+            )
+          } else {
+            item
+          }
+        }
+      state.copy(installationForm = f.copy(afterInstallationPhotos = updated))
+    }
+  }
+
+  fun saveInstallationReport(): InstallationReport? {
+    val form = _uiState.value.installationForm
+    val part1Error = validateInstallationPart1(form)
+    if (part1Error != null) {
+      _uiState.update {
+        it.copy(installationForm = form.copy(currentPage = 1, validationError = part1Error))
+      }
+      return null
+    }
+    val part2Error = validateInstallationPart2(form)
+    if (part2Error != null) {
+      _uiState.update {
+        it.copy(installationForm = form.copy(currentPage = 2, validationError = part2Error))
+      }
+      return null
+    }
+
+    val report =
+      InstallationReport(
+        id = form.editingReportId ?: "inst_${System.currentTimeMillis()}",
+        linkedSurveyId = form.linkedSurveyId,
+        villageName = form.villageName.trim(),
+        consumerNo = form.consumerNo.trim(),
+        installationDate = form.installationDate.trim(),
+        consumerName = form.consumerName.trim(),
+        mobileNo = form.mobileNo.filter { it.isDigit() },
+        systemCapacity = form.systemCapacity.trim(),
+        systemType = form.systemType.trim(),
+        products = form.products,
+        installerName = form.installerName.trim(),
+        installerSignatureStrokes = form.installerSignatureStrokes,
+        accountantName = form.accountantName.trim(),
+        managerName = form.managerName.trim(),
+        supervisorName = form.supervisorName.trim(),
+        customerSignatureStrokes = form.customerSignatureStrokes,
+        inverterSerial = form.inverterSerial,
+        generationMeterSerial = form.generationMeterSerial,
+        panelSerials = form.panelSerials,
+        afterInstallationPhotos = form.afterInstallationPhotos,
+        updatedAtMillis = System.currentTimeMillis(),
+      )
+
+    surveyRepository.saveInstallationReport(report)
+    _uiState.update {
+      it.copy(
+        currentScreen = AppScreen.INSTALLATION_DASHBOARD,
+        activeInstallationTab = InstallationTab.HOME,
+        installationReports = surveyRepository.installationReports.value,
+        installationForm = InstallationFormState(),
+        snackbarMessage = "Installation Certificate saved for ${report.consumerName}.",
+      )
+    }
+    return report
   }
 
   private fun buildReportBRows(surveys: List<CustomerSurvey>): List<ReportBRow> {

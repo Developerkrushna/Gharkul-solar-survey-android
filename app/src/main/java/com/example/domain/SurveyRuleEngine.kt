@@ -213,23 +213,12 @@ object SurveyRuleEngine {
       SurveyCategory.CATEGORY_1 -> {
         requiredDocumentsFor(meterInfo, casteCategory).forEach { docType ->
           val entry = documents[docType]
-          if (entry == null || entry.legibility != DocumentLegibility.CLEAR) {
-            val statusLabel =
-              if (entry?.legibility == DocumentLegibility.UNCLEAR) "फोटो अस्पष्ट (पुन्हा घ्या)"
-              else "कागदपत्र बाकी"
+          if (entry == null || entry.legibility == DocumentLegibility.MISSING) {
             items.add(
               PendingActionItem(
-                titleMr = "${docType.labelMr} – $statusLabel",
+                titleMr = "${docType.labelMr} – कागदपत्र बाकी",
                 responsibleMr = docType.responsiblePartyOnMismatch.labelMr,
                 isCompanyAction = docType.responsiblePartyOnMismatch == ResponsibleParty.COMPANY,
-              )
-            )
-          } else if (!entry.isSizeValid) {
-            items.add(
-              PendingActionItem(
-                titleMr = "${docType.labelMr} – आकार 200-500 KB मर्यादेत नाही",
-                responsibleMr = ResponsibleParty.CUSTOMER.labelMr,
-                isCompanyAction = false,
               )
             )
           }
@@ -377,7 +366,7 @@ object SurveyRuleEngine {
       pendingActions.forEachIndexed { index, item ->
         sb.appendLine("${index + 1}. ${item.titleMr}")
       }
-      sb.appendLine("कृपया आवश्यक कागदपत्रे (200–500 KB स्पष्ट फोटो) लवकरात लवकर उपलब्ध करून द्यावीत.")
+      sb.appendLine("कृपया आवश्यक कागदपत्रे लवकरात लवकर उपलब्ध करून द्यावीत.")
     }
     return sb.toString().trim()
   }

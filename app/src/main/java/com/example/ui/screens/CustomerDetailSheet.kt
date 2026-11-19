@@ -16,11 +16,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Message
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -29,8 +33,14 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -42,6 +52,7 @@ import com.example.domain.SurveyRuleEngine
 import com.example.model.CustomerSurvey
 import com.example.model.DocumentLegibility
 import com.example.model.NameMatchResult
+import com.example.model.SurveyCategory
 import com.example.ui.components.StatusPillBadge
 import com.example.ui.components.StatusTagChip
 import com.example.ui.theme.BannerIceBlue
@@ -59,6 +70,10 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.WarningAmberBg
 import com.example.ui.theme.WarningAmberText
+import com.example.util.SurveyPdfGenerator
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -69,7 +84,12 @@ fun CustomerDetailSheet(
   onDeleteClick: (CustomerSurvey) -> Unit,
 ) {
   val context = LocalContext.current
+  val scope = rememberCoroutineScope()
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+  var showShareDialog by remember { mutableStateOf(false) }
+  var isGeneratingPdf by remember { mutableStateOf(false) }
+  var pdfErrorMessage by remember { mutableStateOf<String?>(null) }
 
   ModalBottomSheet(
     onDismissRequest = onDismiss,
@@ -129,13 +149,6 @@ fun CustomerDetailSheet(
               fontWeight = FontWeight.SemiBold,
             )
           }
-          if (customer.overrideReason.isNotBlank()) {
-            Text(
-              text = "श्रेणी बदल कारण: ${customer.overrideReason}",
-              style = MaterialTheme.typography.bodySmall,
-              color = WarningAmberText,
-            )
-          }
         }
       }
 
@@ -178,7 +191,7 @@ fun CustomerDetailSheet(
         }
       }
 
-      // 1. Site Survey Details (PDF Page 1-2)
+      // 1. Site Survey Details
       Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
@@ -206,10 +219,18 @@ fun CustomerDetailSheet(
           site.hasEarthingSpace?.let {
             DetailLine("अर्थिंगसाठी जागा", if (it) "होय" else "नाही")
           }
-          DetailLine(
-            "Note Cam फोटो (छत / अर्थिंग)",
-            "${if (site.noteCamRoofBeforePhotoDone) "छत ✓" else "छत ✗"} · ${if (site.noteCamEarthingWithOwnerDone) "अर्थिंग ✓" else "अर्थिंग ✗"}",
-          )
+          if (site.noteCamRoofBeforePhotoDone || site.noteCamEarthingWithOwnerDone) {
+            DetailLine(
+              "Note Cam फोटो",
+              "${if (site.noteCamRoofBeforePhotoDone) "छत ✓" else "छत ✗"} · ${if (site.noteCamEarthingWithOwnerDone) "अर्थिंग ✓" else "अर्थिंग ✗"}",
+            )
+            if (site.noteCamRoofGeoInfo.isNotBlank()) {
+              DetailLine("छत Geo-Tag", site.noteCamRoofGeoInfo)
+            }
+            if (site.noteCamEarthingGeoInfo.isNotBlank()) {
+              DetailLine("अर्थिंग Geo-Tag", site.noteCamEarthingGeoInfo)
+            }
+          }
         }
       }
 
@@ -249,21 +270,31 @@ fun CustomerDetailSheet(
                   style = MaterialTheme.typography.bodySmall,
                   color = TextMuted,
                 )
+                if (!entry?.queryNote.isNullOrBlank()) {
+                  Text(
+                    text = "टीप: ${entry?.queryNote}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = WarningAmberText,
+                  )
+                }
               }
               val leg = entry?.legibility ?: DocumentLegibility.MISSING
               val match = entry?.matchResult ?: NameMatchResult.NOT_ENTERED
               val (bg, fg) =
                 when {
-                  leg == DocumentLegibility.CLEAR && (match == NameMatchResult.MATCH || printed.isBlank()) ->
+                  leg == DocumentLegibility.MISSING -> PendingRoseBg to PendingRoseText
+                  match == NameMatchResult.MATCH || printed.isBlank() ->
                     SuccessGreenBg to SuccessGreenText
-                  leg == DocumentLegibility.UNCLEAR || match == NameMatchResult.CLOSE_MATCH ->
+                  match == NameMatchResult.CLOSE_MATCH ->
                     WarningAmberBg to WarningAmberText
                   else -> PendingRoseBg to PendingRoseText
                 }
               val chipText =
-                if (leg != DocumentLegibility.CLEAR) leg.labelMr
-                else if (entry?.printedName.isNullOrBlank()) leg.labelMr
-                else match.labelMr
+                when {
+                  leg == DocumentLegibility.MISSING -> leg.labelMr
+                  printed.isBlank() -> "फोटो जोडलेला"
+                  else -> match.labelMr
+                }
               StatusTagChip(text = chipText, bgColor = bg, textColor = fg)
             }
           }
@@ -289,9 +320,9 @@ fun CustomerDetailSheet(
             fontWeight = FontWeight.Bold,
           )
           DetailLine("कागदपत्रे स्थिती", if (office.documentsCompleteStatus) "पूर्ण" else "अपूर्ण")
-          if (office.earthWireMeters.isNotBlank()) DetailLine("अर्थ वायर", office.earthWireMeters)
-          if (office.acCableMeters.isNotBlank()) DetailLine("AC केबल", office.acCableMeters)
-          if (office.pipeMeters.isNotBlank()) DetailLine("पाईप", office.pipeMeters)
+          DetailLine("१६ Sq.mm. Earth Wire", office.earthWireMeters.ifBlank { "20 मीटर" })
+          DetailLine("AC 1.5 sq.mm केबल", office.acCableMeters.ifBlank { "10 मीटर" })
+          DetailLine("पाईप (१ = ३० मी.)", SurveyPdfGenerator.formatPipeWithMeters(office.pipeMeters))
           DetailLine("सर्व्हे अधिकारी", office.surveyorName.ifBlank { "-" })
           DetailLine(
             "डिजिटल स्वाक्षरी",
@@ -324,33 +355,14 @@ fun CustomerDetailSheet(
         }
       }
 
-      if (customer.executiveRemark.isNotBlank()) {
-        Text(
-          text = "एक्झिक्युटिव्ह शेरा: ${customer.executiveRemark}",
-          style = MaterialTheme.typography.bodySmall,
-          color = TextSecondary,
-        )
-      }
-
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
       ) {
         OutlinedButton(
           onClick = {
-            val msg =
-              SurveyRuleEngine.buildWhatsAppPendingMessage(
-                beneficiaryName = customer.beneficiaryName,
-                villageName = customer.villageNameMr,
-                category = customer.finalCategory,
-                pendingActions = customer.pendingActions,
-              )
-            val intent =
-              Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_TEXT, msg)
-              }
-            context.startActivity(Intent.createChooser(intent, "मेसेज पाठवा"))
+            pdfErrorMessage = null
+            showShareDialog = true
           },
           modifier = Modifier.weight(1f).height(50.dp).testTag("detail_share_button"),
           shape = RoundedCornerShape(14.dp),
@@ -396,6 +408,147 @@ fun CustomerDetailSheet(
 
       Spacer(modifier = Modifier.height(12.dp))
     }
+  }
+
+  if (showShareDialog) {
+    val isRemainingDocsAllowed = customer.finalCategory != SurveyCategory.CATEGORY_1
+    AlertDialog(
+      onDismissRequest = { if (!isGeneratingPdf) showShareDialog = false },
+      containerColor = CardWhite,
+      title = {
+        Text(
+          text = "मेसेज पाठवा / फॉर्म शेअर करा",
+          style = MaterialTheme.typography.titleLarge,
+          color = BrandNavy,
+          fontWeight = FontWeight.Bold,
+        )
+      },
+      text = {
+        Column(
+          modifier = Modifier.fillMaxWidth().testTag("share_options_dialog"),
+          verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          Text(
+            text = "${customer.beneficiaryName} (${customer.finalCategory.shortTagMr})",
+            style = MaterialTheme.typography.bodyMedium,
+            color = TextSecondary,
+          )
+
+          // 1. Remaining Documents button (only enabled for Category 2, 3, and 4)
+          Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            OutlinedButton(
+              onClick = {
+                val msg =
+                  SurveyRuleEngine.buildWhatsAppPendingMessage(
+                    beneficiaryName = customer.beneficiaryName,
+                    villageName = customer.villageNameMr,
+                    category = customer.finalCategory,
+                    pendingActions = customer.pendingActions,
+                  )
+                val intent =
+                  Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, msg)
+                  }
+                showShareDialog = false
+                context.startActivity(Intent.createChooser(intent, "बाकी कागदपत्रांचा मेसेज पाठवा"))
+              },
+              enabled = isRemainingDocsAllowed && !isGeneratingPdf,
+              modifier = Modifier.fillMaxWidth().height(50.dp).testTag("share_remaining_docs_button"),
+              shape = RoundedCornerShape(12.dp),
+              border = BorderStroke(1.dp, if (isRemainingDocsAllowed) BrandNavy else BorderSubtle),
+            ) {
+              Icon(
+                imageVector = Icons.AutoMirrored.Outlined.Message,
+                contentDescription = null,
+                tint = if (isRemainingDocsAllowed) BrandNavy else TextMuted,
+                modifier = Modifier.size(18.dp),
+              )
+              Spacer(modifier = Modifier.width(8.dp))
+              Text(
+                text = "१. बाकी कागदपत्रांचा मेसेज पाठवा",
+                color = if (isRemainingDocsAllowed) BrandNavy else TextMuted,
+                fontWeight = FontWeight.Bold,
+              )
+            }
+            if (!isRemainingDocsAllowed) {
+              Text(
+                text = "श्रेणी १ साठी लागू नाही — सर्व कागदपत्रे पूर्ण आहेत (फक्त श्रेणी २, ३ व ४ साठी उपलब्ध).",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextMuted,
+                modifier = Modifier.testTag("share_remaining_docs_disabled_note"),
+              )
+            }
+          }
+
+          // 2. Share Complete Form PDF button (for all categories)
+          Button(
+            onClick = {
+              isGeneratingPdf = true
+              pdfErrorMessage = null
+              scope.launch {
+                val pdfUri =
+                  withContext(Dispatchers.IO) {
+                    SurveyPdfGenerator.generateCompleteSurveyPdf(context, customer)
+                  }
+                isGeneratingPdf = false
+                if (pdfUri != null) {
+                  showShareDialog = false
+                  val shareIntent =
+                    Intent(Intent.ACTION_SEND).apply {
+                      type = "application/pdf"
+                      putExtra(Intent.EXTRA_STREAM, pdfUri)
+                      putExtra(Intent.EXTRA_SUBJECT, "घरकुल सोलर सर्व्हे फॉर्म - ${customer.beneficiaryName}")
+                      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                  context.startActivity(Intent.createChooser(shareIntent, "संपूर्ण फॉर्म PDF शेअर करा"))
+                } else {
+                  pdfErrorMessage = "PDF तयार करताना त्रुटी आली. कृपया पुन्हा प्रयत्न करा."
+                }
+              }
+            },
+            enabled = !isGeneratingPdf,
+            modifier = Modifier.fillMaxWidth().height(52.dp).testTag("share_complete_pdf_button"),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = BrandNavy, contentColor = Color.White),
+          ) {
+            if (isGeneratingPdf) {
+              CircularProgressIndicator(
+                color = Color.White,
+                strokeWidth = 2.dp,
+                modifier = Modifier.size(18.dp),
+              )
+              Spacer(modifier = Modifier.width(8.dp))
+              Text("PDF तयार होत आहे...", fontWeight = FontWeight.Bold)
+            } else {
+              Icon(
+                imageVector = Icons.Outlined.PictureAsPdf,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+              )
+              Spacer(modifier = Modifier.width(8.dp))
+              Text("२. संपूर्ण फॉर्म PDF शेअर करा", fontWeight = FontWeight.Bold)
+            }
+          }
+
+          if (!pdfErrorMessage.isNullOrBlank()) {
+            Text(
+              text = pdfErrorMessage!!,
+              style = MaterialTheme.typography.bodySmall,
+              color = BrandCrimson,
+            )
+          }
+        }
+      },
+      confirmButton = {
+        TextButton(
+          onClick = { if (!isGeneratingPdf) showShareDialog = false },
+          modifier = Modifier.testTag("share_dialog_close_button"),
+        ) {
+          Text("बंद करा", color = BrandNavy, fontWeight = FontWeight.Bold)
+        }
+      },
+    )
   }
 }
 

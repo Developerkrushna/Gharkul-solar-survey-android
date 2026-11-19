@@ -9,6 +9,7 @@ import com.example.model.DocumentLegibility
 import com.example.model.DocumentType
 import com.example.model.ExecutiveUser
 import com.example.model.HouseType
+import com.example.model.InstallationReport
 import com.example.model.MaterialAndOfficeDetails
 import com.example.model.MeterInfo
 import com.example.model.NameMatchResult
@@ -22,15 +23,22 @@ import kotlinx.coroutines.flow.update
 
 interface SurveyRepository {
   val surveys: StateFlow<List<CustomerSurvey>>
+  val installationReports: StateFlow<List<InstallationReport>>
   fun saveSurvey(survey: CustomerSurvey)
   fun deleteSurvey(surveyId: String): Boolean
+  fun saveInstallationReport(report: InstallationReport)
+  fun deleteInstallationReport(reportId: String): Boolean
   fun getExecutive(): ExecutiveUser
+  fun getInstallationExecutive(): ExecutiveUser
 }
 
 class InMemorySurveyRepository : SurveyRepository {
 
   private val _surveys = MutableStateFlow(seedSurveys())
   override val surveys: StateFlow<List<CustomerSurvey>> = _surveys.asStateFlow()
+
+  private val _installationReports = MutableStateFlow<List<InstallationReport>>(emptyList())
+  override val installationReports: StateFlow<List<InstallationReport>> = _installationReports.asStateFlow()
 
   override fun getExecutive(): ExecutiveUser =
     ExecutiveUser(
@@ -39,6 +47,15 @@ class InMemorySurveyRepository : SurveyRepository {
       email = "ramesh.k@gharkulsolar.in",
       mobile = "9823011223",
       roleMr = "फील्ड एक्झिक्युटिव्ह",
+    )
+
+  override fun getInstallationExecutive(): ExecutiveUser =
+    ExecutiveUser(
+      nameMr = "Vikram Kulkarni",
+      firstNameMr = "Vikram",
+      email = "installer@reflectionmedias.in",
+      mobile = "91300028122",
+      roleMr = "Solar Installation Executive",
     )
 
   override fun saveSurvey(survey: CustomerSurvey) {
@@ -56,6 +73,27 @@ class InMemorySurveyRepository : SurveyRepository {
     var removed = false
     _surveys.update { current ->
       val next = current.filterNot { it.id == surveyId }
+      removed = next.size < current.size
+      next
+    }
+    return removed
+  }
+
+  override fun saveInstallationReport(report: InstallationReport) {
+    _installationReports.update { current ->
+      val idx = current.indexOfFirst { it.id == report.id }
+      if (idx >= 0) {
+        current.toMutableList().apply { set(idx, report) }
+      } else {
+        listOf(report) + current
+      }
+    }
+  }
+
+  override fun deleteInstallationReport(reportId: String): Boolean {
+    var removed = false
+    _installationReports.update { current ->
+      val next = current.filterNot { it.id == reportId }
       removed = next.size < current.size
       next
     }
@@ -82,7 +120,7 @@ class InMemorySurveyRepository : SurveyRepository {
         gps = "19.0481° N, 74.7392° E",
         meterInfo = MeterInfo(
           hasMeter = true,
-          consumerNumber = "18203948120",
+          consumerNumber = "182039481201",
           meterHolderName = "सुनीता शिंदे",
           sameAsBeneficiary = true,
           isPoleNearbyForNewConn = true,
@@ -126,7 +164,7 @@ class InMemorySurveyRepository : SurveyRepository {
         gps = "19.0493° N, 74.7410° E",
         meterInfo = MeterInfo(
           hasMeter = true,
-          consumerNumber = "18203948195",
+          consumerNumber = "182039481952",
           meterHolderName = "रामदास तुकाराम पवार",
           sameAsBeneficiary = true,
           isPoleNearbyForNewConn = true,
@@ -171,7 +209,7 @@ class InMemorySurveyRepository : SurveyRepository {
         gps = "19.0472° N, 74.7365° E",
         meterInfo = MeterInfo(
           hasMeter = true,
-          consumerNumber = "18203948231",
+          consumerNumber = "182039482313",
           meterHolderName = "बबन जाधव",
           sameAsBeneficiary = false,
           relationship = "पती",
@@ -260,7 +298,7 @@ class InMemorySurveyRepository : SurveyRepository {
         gps = "19.8902° N, 75.5018° E",
         meterInfo = MeterInfo(
           hasMeter = true,
-          consumerNumber = "22401199882",
+          consumerNumber = "224011998824",
           meterHolderName = "कविता देशमुख",
           sameAsBeneficiary = true,
           isPoleNearbyForNewConn = true,
@@ -335,7 +373,13 @@ class InMemorySurveyRepository : SurveyRepository {
       gpsLocation = gps,
       meterInfo = meterInfo,
       siteSurveyDetails = site,
-      documentComplianceChecks = DocumentComplianceChecks(),
+      documentComplianceChecks = DocumentComplianceChecks(
+        lightBillIsResidential = true,
+        panNameAndDobMatchAadhaar = true,
+        bankIsNationalizedNotAdcc = true,
+        singleMobileLinkedAllDocs = true,
+        aadhaarSeededToBank = true,
+      ),
       materialAndOfficeDetails = MaterialAndOfficeDetails(documentsCompleteStatus = pending.isEmpty()),
       documents = docs,
       checklistAnswers = checklist,

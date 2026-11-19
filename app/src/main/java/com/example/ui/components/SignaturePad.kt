@@ -50,6 +50,8 @@ fun SignaturePadCard(
   onStrokesChange: (List<List<Pair<Float, Float>>>) -> Unit,
   modifier: Modifier = Modifier,
   testTag: String = "signature_pad",
+  clearLabel: String = "पुसा",
+  placeholderText: String = "येथे बोटाने सही करा",
 ) {
   val currentStroke = remember { mutableStateListOf<Pair<Float, Float>>() }
   var dragVersion by remember { mutableStateOf(0) }
@@ -74,7 +76,7 @@ fun SignaturePadCard(
           },
           modifier = Modifier.testTag("${testTag}_clear"),
         ) {
-          Text("पुसा", color = BrandCrimson, fontWeight = FontWeight.Bold)
+          Text(clearLabel, color = BrandCrimson, fontWeight = FontWeight.Bold)
         }
       }
     }
@@ -88,7 +90,7 @@ fun SignaturePadCard(
       Box(modifier = Modifier.fillMaxSize()) {
         if (strokes.isEmpty() && currentStroke.isEmpty()) {
           Text(
-            text = "येथे बोटाने सही करा",
+            text = placeholderText,
             style = MaterialTheme.typography.bodySmall,
             color = TextMuted,
             modifier = Modifier.align(Alignment.Center),

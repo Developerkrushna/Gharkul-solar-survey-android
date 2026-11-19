@@ -1,9 +1,16 @@
 package com.example.model
 
+enum class LoginRole {
+  SURVEY_EXECUTIVE,
+  SOLAR_INSTALLATION,
+}
+
 enum class AppScreen {
   LOGIN,
   VILLAGE_SELECT,
   MAIN_APP,
+  INSTALLATION_DASHBOARD,
+  INSTALLATION_FORM,
 }
 
 enum class MainTab {
@@ -28,6 +35,7 @@ enum class RoofType(val labelMr: String) {
   TIN_SHEET("पत्रा"),
   TILED("कौल"),
   CEMENT_SHEET("सिमेंट पत्रा"),
+  UNDER_CONSTRUCTION("बांधकाम सुरू आहे"),
 }
 
 enum class SolarCapacity(val kw: Int, val labelMr: String) {
@@ -42,7 +50,7 @@ enum class DocumentType(
 ) {
   LIGHT_BILL(
     labelMr = "लाईट बिल",
-    subtitleMr = "घरगुती (Residential) अनिवार्य. कमर्शियल किंवा इंडस्ट्रियल चालणार नाही.",
+    subtitleMr = "घरगुती (Residential) अनिवार्य.",
     isRequiredCore = true,
     responsiblePartyOnMismatch = ResponsibleParty.COMPANY,
   ),
@@ -180,6 +188,7 @@ data class DocumentEntry(
   val isSizeValid: Boolean = true,
   val legibility: DocumentLegibility = DocumentLegibility.MISSING,
   val matchResult: NameMatchResult = NameMatchResult.NOT_ENTERED,
+  val queryNote: String = "",
 )
 
 data class MeterInfo(
@@ -201,24 +210,26 @@ data class SiteSurveyDetails(
   val noteCamRoofBeforePhotoDone: Boolean = false,
   val noteCamRoofBeforePhotoUri: String? = null,
   val noteCamRoofBeforePhotoKb: Int? = null,
+  val noteCamRoofGeoInfo: String = "",
   val noteCamEarthingWithOwnerDone: Boolean = false,
   val noteCamEarthingWithOwnerPhotoUri: String? = null,
   val noteCamEarthingWithOwnerPhotoKb: Int? = null,
+  val noteCamEarthingGeoInfo: String = "",
 )
 
 data class DocumentComplianceChecks(
-  val lightBillIsResidential: Boolean = true,
-  val panNameAndDobMatchAadhaar: Boolean = true,
-  val bankIsNationalizedNotAdcc: Boolean = true,
-  val singleMobileLinkedAllDocs: Boolean = true,
-  val aadhaarSeededToBank: Boolean = true,
+  val lightBillIsResidential: Boolean = false,
+  val panNameAndDobMatchAadhaar: Boolean = false,
+  val bankIsNationalizedNotAdcc: Boolean = false,
+  val singleMobileLinkedAllDocs: Boolean = false,
+  val aadhaarSeededToBank: Boolean = false,
 )
 
 data class MaterialAndOfficeDetails(
   val documentsCompleteStatus: Boolean = true, // पूर्ण / अपूर्ण
   val earthWireMeters: String = "20 मीटर",
   val acCableMeters: String = "10 मीटर",
-  val pipeMeters: String = "",
+  val pipeMeters: String = "5 पाईप",
   val customerSignatureStrokes: List<List<Pair<Float, Float>>> = emptyList(),
   val surveyorName: String = "रमेश कुलकर्णी",
   val surveyorSignatureStrokes: List<List<Pair<Float, Float>>> = emptyList(),

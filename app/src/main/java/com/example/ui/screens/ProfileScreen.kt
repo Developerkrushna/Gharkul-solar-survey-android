@@ -23,7 +23,6 @@ import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -35,25 +34,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.model.ExecutiveUser
-import com.example.model.ReportBRow
 import com.example.ui.theme.BannerIceBlue
 import com.example.ui.theme.BorderSubtle
 import com.example.ui.theme.BrandCrimson
 import com.example.ui.theme.BrandNavy
 import com.example.ui.theme.CardWhite
-import com.example.ui.theme.DividerLight
 import com.example.ui.theme.TextMuted
-import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 
 @Composable
 fun ProfileScreen(
   executive: ExecutiveUser,
   villageBreadcrumb: String,
-  reportBRows: List<ReportBRow>,
   onChangeVillageClick: () -> Unit,
   onLogoutClick: () -> Unit,
   modifier: Modifier = Modifier,
@@ -145,86 +139,6 @@ fun ProfileScreen(
               modifier = Modifier.testTag("change_village_button"),
             ) {
               Text("गाव बदला", color = BrandNavy, fontWeight = FontWeight.Bold)
-            }
-          }
-        }
-      }
-
-      // Digital Survey Report B Table (from 1 kw घरकुल सर्वे रिपोर्ट B.pdf)
-      item {
-        Surface(
-          modifier = Modifier.fillMaxWidth(),
-          shape = RoundedCornerShape(16.dp),
-          color = CardWhite,
-          border = BorderStroke(1.dp, BorderSubtle),
-        ) {
-          Column(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
-            Text(
-              text = "1 kW घरकुल सर्वे रिपोर्ट B (सारांश)",
-              style = MaterialTheme.typography.titleMedium,
-              color = BrandNavy,
-              fontWeight = FontWeight.Bold,
-            )
-
-            Row(
-              modifier =
-                Modifier.fillMaxWidth()
-                  .background(BannerIceBlue, RoundedCornerShape(8.dp))
-                  .padding(horizontal = 8.dp, vertical = 8.dp),
-            ) {
-              Text("तपशील", style = MaterialTheme.typography.labelSmall, color = BrandNavy, fontWeight = FontWeight.Bold, modifier = Modifier.weight(2.6f))
-              Text("एकूण", style = MaterialTheme.typography.labelSmall, color = BrandNavy, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.weight(0.8f))
-              Text("OPEN", style = MaterialTheme.typography.labelSmall, color = BrandNavy, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.weight(0.8f))
-              Text("SC", style = MaterialTheme.typography.labelSmall, color = BrandNavy, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.weight(0.7f))
-              Text("ST", style = MaterialTheme.typography.labelSmall, color = BrandNavy, fontWeight = FontWeight.Bold, textAlign = TextAlign.End, modifier = Modifier.weight(0.7f))
-            }
-
-            reportBRows.forEachIndexed { index, row ->
-              if (index > 0) HorizontalDivider(color = DividerLight)
-              Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp, horizontal = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                Text(
-                  text = if (row.srNo == "एकूण") row.labelMr else "${row.srNo}. ${row.labelMr}",
-                  style = MaterialTheme.typography.bodySmall,
-                  color = TextPrimary,
-                  fontWeight = if (index == 0) FontWeight.Bold else FontWeight.Normal,
-                  modifier = Modifier.weight(2.6f),
-                )
-                Text(
-                  text = row.total.toString(),
-                  style = MaterialTheme.typography.bodySmall,
-                  color = BrandNavy,
-                  fontWeight = FontWeight.Bold,
-                  textAlign = TextAlign.Center,
-                  modifier = Modifier.weight(0.8f),
-                )
-                Text(
-                  text = row.openCount.toString(),
-                  style = MaterialTheme.typography.bodySmall,
-                  color = TextSecondary,
-                  textAlign = TextAlign.Center,
-                  modifier = Modifier.weight(0.8f),
-                )
-                Text(
-                  text = row.scCount.toString(),
-                  style = MaterialTheme.typography.bodySmall,
-                  color = TextSecondary,
-                  textAlign = TextAlign.Center,
-                  modifier = Modifier.weight(0.7f),
-                )
-                Text(
-                  text = row.stCount.toString(),
-                  style = MaterialTheme.typography.bodySmall,
-                  color = TextSecondary,
-                  textAlign = TextAlign.End,
-                  modifier = Modifier.weight(0.7f),
-                )
-              }
             }
           }
         }

@@ -277,6 +277,98 @@ private fun BottomNavItem(
 }
 
 @Composable
+fun InstallationBottomBar(
+  activeTab: com.example.model.InstallationTab,
+  onSelectTab: (com.example.model.InstallationTab) -> Unit,
+  onAddManualClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Surface(
+    modifier = modifier.fillMaxWidth(),
+    color = CardWhite,
+    shadowElevation = 8.dp,
+  ) {
+    Column {
+      HorizontalDivider(thickness = 1.dp, color = BorderSubtle)
+      Row(
+        modifier =
+          Modifier.fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceAround,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        BottomNavItem(
+          label = "Home",
+          selected = activeTab == com.example.model.InstallationTab.HOME,
+          icon = {
+            Icon(
+              imageVector =
+                if (activeTab == com.example.model.InstallationTab.HOME) Icons.Filled.Home
+                else Icons.Outlined.Home,
+              contentDescription = "Home",
+              tint = if (activeTab == com.example.model.InstallationTab.HOME) BrandNavy else TextMuted,
+              modifier = Modifier.size(24.dp),
+            )
+          },
+          onClick = { onSelectTab(com.example.model.InstallationTab.HOME) },
+          tag = "install_nav_home",
+        )
+
+        Column(
+          horizontalAlignment = Alignment.CenterHorizontally,
+          modifier =
+            Modifier.clip(RoundedCornerShape(12.dp))
+              .clickable(onClick = onAddManualClick)
+              .minimumInteractiveComponentSize()
+              .padding(horizontal = 12.dp, vertical = 2.dp)
+              .testTag("install_nav_add_manual"),
+        ) {
+          Box(
+            modifier =
+              Modifier.size(44.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(BrandCrimson),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = Icons.Filled.Add,
+              contentDescription = "Manual Installation",
+              tint = Color.White,
+              modifier = Modifier.size(26.dp),
+            )
+          }
+          Spacer(modifier = Modifier.height(2.dp))
+          Text(
+            text = "Manual",
+            style = MaterialTheme.typography.labelSmall,
+            color = BrandCrimson,
+            fontWeight = FontWeight.Bold,
+          )
+        }
+
+        BottomNavItem(
+          label = "Profile",
+          selected = activeTab == com.example.model.InstallationTab.PROFILE,
+          icon = {
+            Icon(
+              imageVector =
+                if (activeTab == com.example.model.InstallationTab.PROFILE) Icons.Filled.Person
+                else Icons.Outlined.Person,
+              contentDescription = "Profile",
+              tint = if (activeTab == com.example.model.InstallationTab.PROFILE) BrandNavy else TextMuted,
+              modifier = Modifier.size(24.dp),
+            )
+          },
+          onClick = { onSelectTab(com.example.model.InstallationTab.PROFILE) },
+          tag = "install_nav_profile",
+        )
+      }
+    }
+  }
+}
+
+@Composable
 fun StatusPillBadge(
   status: OverallStatus,
   modifier: Modifier = Modifier,
@@ -379,6 +471,32 @@ fun YesNoPillGroup(
 }
 
 @Composable
+fun NullableYesNoPillGroup(
+  value: Boolean?,
+  onValueChange: (Boolean) -> Unit,
+  yesLabel: String = "होय",
+  noLabel: String = "नाही",
+  testTagPrefix: String = "yn_nullable",
+) {
+  Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    YesNoSmallPill(
+      text = yesLabel,
+      selected = value == true,
+      activeColor = BrandNavy,
+      onClick = { onValueChange(true) },
+      modifier = Modifier.testTag("${testTagPrefix}_yes"),
+    )
+    YesNoSmallPill(
+      text = noLabel,
+      selected = value == false,
+      activeColor = BrandCrimson,
+      onClick = { onValueChange(false) },
+      modifier = Modifier.testTag("${testTagPrefix}_no"),
+    )
+  }
+}
+
+@Composable
 private fun YesNoSmallPill(
   text: String,
   selected: Boolean,
@@ -387,7 +505,7 @@ private fun YesNoSmallPill(
   modifier: Modifier = Modifier,
 ) {
   Surface(
-    modifier = modifier.height(44.dp).width(68.dp),
+    modifier = modifier.height(48.dp).width(68.dp),
     shape = RoundedCornerShape(10.dp),
     color = if (selected) activeColor else CardWhite,
     border = BorderStroke(1.dp, if (selected) activeColor else BorderSubtle),

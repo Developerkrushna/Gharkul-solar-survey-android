@@ -4,6 +4,7 @@ import android.app.DatePickerDialog
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -23,8 +24,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CalendarToday
 import androidx.compose.material.icons.outlined.MyLocation
 import androidx.compose.material.icons.outlined.WarningAmber
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -52,6 +51,7 @@ import com.example.model.HouseType
 import com.example.model.MeterInfo
 import com.example.model.RoofType
 import com.example.model.SiteSurveyDetails
+import com.example.ui.components.NullableYesNoPillGroup
 import com.example.ui.components.SegmentedChoiceButton
 import com.example.ui.components.YesNoPillGroup
 import com.example.ui.theme.BannerIceBlue
@@ -246,12 +246,13 @@ fun WizardStep1BasicAndMeter(
       testTag = "wizard_name_input",
     )
 
-    // * मोबाईल नं. (आधार व बँकेशी लिंक असलेला)
+    // * मोबाईल नं. (आधार व बँकेशी लिंक असलेला) — 10 digit limit
     LabeledTextField(
       label = "मोबाईल नं. (आधार व बँकेशी लिंक असलेला)",
       isMandatory = true,
       value = wizard.mobile,
       placeholder = "१० अंकी चालू मोबाईल नंबर",
+      supportingText = "${wizard.mobile.length} / 10 अंक",
       onValueChange = { input ->
         val digits = input.filter { it.isDigit() }.take(10)
         onUpdateBasic(null, null, digits, null, null, null, null, null, null, null)
@@ -266,7 +267,7 @@ fun WizardStep1BasicAndMeter(
       isMandatory = true,
       value = wizard.emailId,
       placeholder = "name@gmail.com",
-      onValueChange = { onUpdateBasic(null, null, null, it, null, null, null, null, null, null) },
+      onValueChange = { onUpdateBasic(null, null, null, it.replace(" ", ""), null, null, null, null, null, null) },
       keyboardType = KeyboardType.Email,
       testTag = "wizard_email_input",
     )
@@ -404,8 +405,12 @@ fun WizardStep1BasicAndMeter(
               isMandatory = false,
               value = wizard.meterInfo.consumerNumber,
               placeholder = "१२ अंकी ग्राहक क्रमांक",
+              supportingText =
+                if (wizard.meterInfo.consumerNumber.isNotEmpty())
+                  "${wizard.meterInfo.consumerNumber.length} / 12 अंक"
+                else "भरल्यास १२ अंकी ग्राहक क्रमांक आवश्यक",
               onValueChange = { num ->
-                onUpdateMeter { it.copy(consumerNumber = num.filter { c -> c.isDigit() }.take(15)) }
+                onUpdateMeter { it.copy(consumerNumber = num.filter { c -> c.isDigit() }.take(12)) }
               },
               keyboardType = KeyboardType.Number,
               testTag = "meter_consumer_no_input",
@@ -575,60 +580,39 @@ fun WizardStep1BasicAndMeter(
           testTagPrefix = "earthing_space",
         )
 
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-          MandatoryLabel("छत किंवा घर एकच मजली आहे का?", isMandatory = true)
-          Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          MandatoryLabel(
+            text = "छत किंवा घर एकच मजली आहे का?",
+            isMandatory = true,
+            modifier = Modifier.weight(1f).padding(end = 10.dp),
+          )
+          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             HouseType.entries.forEach { house ->
-              SegmentedChoiceButton(
-                label = house.labelMr,
-                selected = wizard.houseType == house,
+              val selected = wizard.houseType == house
+              Surface(
+                modifier = Modifier.height(48.dp).testTag("house_${house.name}"),
+                shape = RoundedCornerShape(10.dp),
+                color = if (selected) BrandNavy else CardWhite,
+                border = BorderStroke(1.dp, if (selected) BrandNavy else BorderSubtle),
                 onClick = { onUpdateBasic(null, null, null, null, null, null, null, null, house, null) },
-                modifier = Modifier.weight(1f),
-                testTag = "house_${house.name}",
-              )
+              ) {
+                Box(
+                  modifier = Modifier.padding(horizontal = 12.dp),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Text(
+                    text = house.labelMr,
+                    color = if (selected) Color.White else TextSecondary,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                  )
+                }
+              }
             }
-          }
-        }
-
-        HorizontalDivider(color = DividerLight)
-
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-          MandatoryLabel("अ‍ॅप (Note Cam) मध्ये फोटो घेतले का?", isMandatory = true)
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Checkbox(
-              checked = wizard.siteSurveyDetails.noteCamRoofBeforePhotoDone,
-              onCheckedChange = { checked ->
-                onUpdateSiteSurvey { it.copy(noteCamRoofBeforePhotoDone = checked) }
-              },
-              colors = CheckboxDefaults.colors(checkedColor = BrandNavy),
-              modifier = Modifier.testTag("notecam_roof_checkbox"),
-            )
-            Text(
-              text = "सोलर बसवण्याच्या आधीच्या छताचा फोटो",
-              style = MaterialTheme.typography.bodyMedium,
-              color = TextPrimary,
-            )
-          }
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Checkbox(
-              checked = wizard.siteSurveyDetails.noteCamEarthingWithOwnerDone,
-              onCheckedChange = { checked ->
-                onUpdateSiteSurvey { it.copy(noteCamEarthingWithOwnerDone = checked) }
-              },
-              colors = CheckboxDefaults.colors(checkedColor = BrandNavy),
-              modifier = Modifier.testTag("notecam_earthing_checkbox"),
-            )
-            Text(
-              text = "Earthing Point चा फोटो (त्या ठिकाणी मालकासोबत उभे राहून)",
-              style = MaterialTheme.typography.bodyMedium,
-              color = TextPrimary,
-            )
           }
         }
       }
@@ -665,6 +649,7 @@ fun LabeledTextField(
   onValueChange: (String) -> Unit,
   modifier: Modifier = Modifier,
   isMandatory: Boolean = false,
+  supportingText: String? = null,
   keyboardType: KeyboardType = KeyboardType.Text,
   singleLine: Boolean = true,
   testTag: String = "",
@@ -678,6 +663,10 @@ fun LabeledTextField(
         Modifier.fillMaxWidth()
           .then(if (testTag.isNotEmpty()) Modifier.testTag(testTag) else Modifier),
       placeholder = { Text(placeholder, color = TextMuted) },
+      supportingText =
+        supportingText?.let { msg ->
+          { Text(text = msg, style = MaterialTheme.typography.labelSmall, color = TextMuted) }
+        },
       singleLine = singleLine,
       shape = RoundedCornerShape(14.dp),
       keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
@@ -708,7 +697,7 @@ private fun MandatoryYesNoRow(
     MandatoryLabel(
       text = label,
       isMandatory = isMandatory,
-      modifier = Modifier.weight(1f).padding(end = 8.dp),
+      modifier = Modifier.weight(1f).padding(end = 10.dp),
     )
     YesNoPillGroup(
       value = value,
@@ -726,25 +715,20 @@ private fun MandatoryNullableYesNoRow(
   onValueChange: (Boolean) -> Unit,
   testTagPrefix: String,
 ) {
-  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    MandatoryLabel(text = label, isMandatory = isMandatory)
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-      SegmentedChoiceButton(
-        label = "होय",
-        selected = value == true,
-        onClick = { onValueChange(true) },
-        selectedColor = BrandNavy,
-        modifier = Modifier.weight(1f),
-        testTag = "${testTagPrefix}_yes",
-      )
-      SegmentedChoiceButton(
-        label = "नाही",
-        selected = value == false,
-        onClick = { onValueChange(false) },
-        selectedColor = BrandCrimson,
-        modifier = Modifier.weight(1f),
-        testTag = "${testTagPrefix}_no",
-      )
-    }
+  Row(
+    modifier = Modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.SpaceBetween,
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    MandatoryLabel(
+      text = label,
+      isMandatory = isMandatory,
+      modifier = Modifier.weight(1f).padding(end = 10.dp),
+    )
+    NullableYesNoPillGroup(
+      value = value,
+      onValueChange = onValueChange,
+      testTagPrefix = testTagPrefix,
+    )
   }
 }

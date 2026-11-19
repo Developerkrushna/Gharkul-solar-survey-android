@@ -1,11 +1,10 @@
 package com.example.ui.screens
 
-import android.content.Intent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,11 +15,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Share
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -29,15 +29,18 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import com.example.domain.SurveyRuleEngine
 import com.example.model.ChecklistAnswers
 import com.example.model.MaterialAndOfficeDetails
 import com.example.model.SurveyCategory
@@ -52,12 +55,13 @@ import com.example.ui.theme.CardWhite
 import com.example.ui.theme.DividerLight
 import com.example.ui.theme.SuccessGreenBg
 import com.example.ui.theme.SuccessGreenText
+import com.example.ui.theme.SurfaceCanvas
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.example.util.SurveyPdfGenerator
 import com.example.viewmodel.AddEditWizardState
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun WizardStep3ReviewAndResult(
   wizard: AddEditWizardState,
@@ -68,8 +72,8 @@ fun WizardStep3ReviewAndResult(
   onOverrideReasonChange: (String) -> Unit,
   onRemarkChange: (String) -> Unit,
 ) {
-  val context = LocalContext.current
   val effectiveCategory = wizard.effectiveCategory
+  val office = wizard.materialAndOfficeDetails
 
   Column(
     modifier =
@@ -78,7 +82,7 @@ fun WizardStep3ReviewAndResult(
         .padding(horizontal = 16.dp, vertical = 16.dp),
     verticalArrangement = Arrangement.spacedBy(16.dp),
   ) {
-    // All-Category Yes/No Questions Card matching image.png + priority rule
+    // All-Category Yes/No Questions Card + priority rule (4 > 3 > 2 > 1)
     Surface(
       modifier = Modifier.fillMaxWidth(),
       shape = RoundedCornerShape(16.dp),
@@ -213,7 +217,7 @@ fun WizardStep3ReviewAndResult(
       }
     }
 
-    // ३. साईट सर्व्हे निरीक्षण व शेरा (Office Use Only) & Material Details from PDF Page 2
+    // ३. साईट सर्व्हे निरीक्षण व साहित्य तपशील (Office Use Only)
     Surface(
       modifier = Modifier.fillMaxWidth(),
       shape = RoundedCornerShape(16.dp),
@@ -225,7 +229,7 @@ fun WizardStep3ReviewAndResult(
         verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
         Text(
-          text = "३. साईट सर्व्हे निरीक्षण व शेरा (Office Use Only)",
+          text = "३. साईट सर्व्हे निरीक्षण व साहित्य तपशील",
           style = MaterialTheme.typography.titleMedium,
           color = BrandNavy,
           fontWeight = FontWeight.Bold,
@@ -235,7 +239,7 @@ fun WizardStep3ReviewAndResult(
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
           SegmentedChoiceButton(
             label = "पूर्ण",
-            selected = wizard.materialAndOfficeDetails.documentsCompleteStatus,
+            selected = office.documentsCompleteStatus,
             onClick = { onUpdateMaterialAndOffice { it.copy(documentsCompleteStatus = true) } },
             selectedColor = BrandNavy,
             modifier = Modifier.weight(1f),
@@ -243,7 +247,7 @@ fun WizardStep3ReviewAndResult(
           )
           SegmentedChoiceButton(
             label = "अपूर्ण",
-            selected = !wizard.materialAndOfficeDetails.documentsCompleteStatus,
+            selected = !office.documentsCompleteStatus,
             onClick = { onUpdateMaterialAndOffice { it.copy(documentsCompleteStatus = false) } },
             selectedColor = BrandCrimson,
             modifier = Modifier.weight(1f),
@@ -254,26 +258,63 @@ fun WizardStep3ReviewAndResult(
         HorizontalDivider(color = DividerLight)
         MandatoryLabel("साहित्य तपशील (Material Details)", isMandatory = true)
 
-        LabeledTextField(
-          label = "१६ Sq.mm. Aluminium (Earth Wire)",
-          value = wizard.materialAndOfficeDetails.earthWireMeters,
-          placeholder = "20 मीटर",
-          onValueChange = { v -> onUpdateMaterialAndOffice { it.copy(earthWireMeters = v) } },
-          testTag = "material_earth_wire",
+        FixedMaterialWithCustomInputRow(
+          title = "१६ Sq.mm. Aluminium (Earth Wire)",
+          subtitle = "ठरवलेली मर्यादा: 20 मीटर (बदलण्यासाठी + दाबा)",
+          currentDisplayValue = office.earthWireMeters.ifBlank { "20 मीटर" },
+          defaultValue = "20 मीटर",
+          unitLabel = "मीटर",
+          inputPlaceholder = "एकूण मीटर संख्या लिहा (उदा. 25)",
+          testTagPrefix = "material_earth_wire",
+          onSaveCustomValue = { newDigits ->
+            onUpdateMaterialAndOffice {
+              it.copy(earthWireMeters = "$newDigits मीटर")
+            }
+          },
+          onResetDefault = {
+            onUpdateMaterialAndOffice { it.copy(earthWireMeters = "20 मीटर") }
+          },
         )
-        LabeledTextField(
-          label = "AC 1.5 sq.mm 3 Core केबल",
-          value = wizard.materialAndOfficeDetails.acCableMeters,
-          placeholder = "10 मीटर",
-          onValueChange = { v -> onUpdateMaterialAndOffice { it.copy(acCableMeters = v) } },
-          testTag = "material_ac_cable",
+
+        HorizontalDivider(color = DividerLight)
+
+        FixedMaterialWithCustomInputRow(
+          title = "AC 1.5 sq.mm 3 Core केबल",
+          subtitle = "ठरवलेली मर्यादा: 10 मीटर (बदलण्यासाठी + दाबा)",
+          currentDisplayValue = office.acCableMeters.ifBlank { "10 मीटर" },
+          defaultValue = "10 मीटर",
+          unitLabel = "मीटर",
+          inputPlaceholder = "एकूण मीटर संख्या लिहा (उदा. 15)",
+          testTagPrefix = "material_ac_cable",
+          onSaveCustomValue = { newDigits ->
+            onUpdateMaterialAndOffice {
+              it.copy(acCableMeters = "$newDigits मीटर")
+            }
+          },
+          onResetDefault = {
+            onUpdateMaterialAndOffice { it.copy(acCableMeters = "10 मीटर") }
+          },
         )
-        LabeledTextField(
-          label = "पाईप (Pipe)",
-          value = wizard.materialAndOfficeDetails.pipeMeters,
-          placeholder = "मीटर / तपशील लिहा",
-          onValueChange = { v -> onUpdateMaterialAndOffice { it.copy(pipeMeters = v) } },
-          testTag = "material_pipe",
+
+        HorizontalDivider(color = DividerLight)
+
+        FixedMaterialWithCustomInputRow(
+          title = "पाईप (१ पाईप = ३० मीटर)",
+          subtitle = "ठरवलेली मर्यादा: 5 पाईप = 150 मीटर (बदलण्यासाठी + दाबा)",
+          currentDisplayValue = SurveyPdfGenerator.formatPipeWithMeters(office.pipeMeters),
+          defaultValue = "5 पाईप",
+          rawStoredValue = office.pipeMeters.ifBlank { "5 पाईप" },
+          unitLabel = "पाईप",
+          inputPlaceholder = "एकूण पाईप संख्या लिहा (उदा. 7)",
+          testTagPrefix = "material_pipe",
+          onSaveCustomValue = { newDigits ->
+            onUpdateMaterialAndOffice {
+              it.copy(pipeMeters = "$newDigits पाईप")
+            }
+          },
+          onResetDefault = {
+            onUpdateMaterialAndOffice { it.copy(pipeMeters = "5 पाईप") }
+          },
         )
 
         Text(
@@ -304,7 +345,7 @@ fun WizardStep3ReviewAndResult(
 
         SignaturePadCard(
           title = "ग्राहक / अर्जदाराची सही",
-          strokes = wizard.materialAndOfficeDetails.customerSignatureStrokes,
+          strokes = office.customerSignatureStrokes,
           onStrokesChange = { s ->
             onUpdateMaterialAndOffice { it.copy(customerSignatureStrokes = s) }
           },
@@ -316,7 +357,7 @@ fun WizardStep3ReviewAndResult(
         LabeledTextField(
           label = "सर्व्हे करणाऱ्या व्यक्तीचे नाव",
           isMandatory = true,
-          value = wizard.materialAndOfficeDetails.surveyorName,
+          value = office.surveyorName,
           placeholder = "सर्व्हे एक्झिक्युटिव्ह नाव",
           onValueChange = { name -> onUpdateMaterialAndOffice { it.copy(surveyorName = name) } },
           testTag = "surveyor_name_input",
@@ -324,117 +365,13 @@ fun WizardStep3ReviewAndResult(
 
         SignaturePadCard(
           title = "सर्व्हे करणाऱ्या व्यक्तीची सही",
-          strokes = wizard.materialAndOfficeDetails.surveyorSignatureStrokes,
+          strokes = office.surveyorSignatureStrokes,
           onStrokesChange = { s ->
             onUpdateMaterialAndOffice { it.copy(surveyorSignatureStrokes = s) }
           },
           testTag = "surveyor_signature_pad",
         )
       }
-    }
-
-    // Category Override + Executive Remark
-    Surface(
-      modifier = Modifier.fillMaxWidth(),
-      shape = RoundedCornerShape(16.dp),
-      color = CardWhite,
-      border = BorderStroke(1.dp, BorderSubtle),
-    ) {
-      Column(
-        modifier = Modifier.fillMaxWidth().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        Text(
-          text = "श्रेणी बदलायची असल्यास निवडा (पर्यायी)",
-          style = MaterialTheme.typography.titleSmall,
-          color = TextPrimary,
-        )
-        FlowRow(
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-          verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-          SurveyCategory.entries.forEach { cat ->
-            val isSelected = effectiveCategory == cat
-            FilterChip(
-              selected = isSelected,
-              onClick = {
-                if (cat == wizard.suggestedCategory) onOverrideCategory(null)
-                else onOverrideCategory(cat)
-              },
-              label = { Text("श्रेणी ${cat.number}") },
-              colors =
-                FilterChipDefaults.filterChipColors(
-                  selectedContainerColor = BrandNavy,
-                  selectedLabelColor = Color.White,
-                ),
-            )
-          }
-        }
-
-        if (wizard.overrideCategory != null && wizard.overrideCategory != wizard.suggestedCategory) {
-          OutlinedTextField(
-            value = wizard.overrideReason,
-            onValueChange = onOverrideReasonChange,
-            modifier = Modifier.fillMaxWidth().testTag("override_reason_input"),
-            label = { Text("श्रेणी बदलण्याचे कारण *") },
-            placeholder = { Text("सुचवलेली श्रेणी बदलण्याचे कारण लिहा", color = TextMuted) },
-            shape = RoundedCornerShape(12.dp),
-            colors =
-              OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = BrandNavy,
-                unfocusedBorderColor = BorderSubtle,
-              ),
-          )
-        }
-
-        OutlinedTextField(
-          value = wizard.executiveRemark,
-          onValueChange = onRemarkChange,
-          modifier = Modifier.fillMaxWidth().testTag("executive_remark_input"),
-          label = { Text("एक्झिक्युटिव्ह शेरा (पर्यायी)") },
-          placeholder = { Text("ग्राहक किंवा कागदपत्रांबद्दल विशेष नोंद", color = TextMuted) },
-          shape = RoundedCornerShape(12.dp),
-          colors =
-            OutlinedTextFieldDefaults.colors(
-              focusedBorderColor = BrandNavy,
-              unfocusedBorderColor = BorderSubtle,
-            ),
-        )
-      }
-    }
-
-    OutlinedButton(
-      onClick = {
-        val message =
-          SurveyRuleEngine.buildWhatsAppPendingMessage(
-            beneficiaryName = wizard.beneficiaryName.ifBlank { "ग्राहक" },
-            villageName = villageNameMr,
-            category = effectiveCategory,
-            pendingActions = wizard.pendingActions,
-          )
-        val intent =
-          Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, message)
-          }
-        context.startActivity(Intent.createChooser(intent, "ग्राहकाला माहिती पाठवा"))
-      },
-      modifier = Modifier.fillMaxWidth().height(50.dp).testTag("share_pending_message_button"),
-      shape = RoundedCornerShape(14.dp),
-      border = BorderStroke(1.dp, BrandNavy),
-    ) {
-      Icon(
-        imageVector = Icons.Outlined.Share,
-        contentDescription = null,
-        tint = BrandNavy,
-        modifier = Modifier.size(18.dp),
-      )
-      Spacer(modifier = Modifier.width(8.dp))
-      Text(
-        text = "ग्राहकाला बाकी कागदपत्रांचा मेसेज पाठवा (WhatsApp/SMS)",
-        color = BrandNavy,
-        style = MaterialTheme.typography.labelLarge,
-      )
     }
 
     if (!wizard.validationError.isNullOrBlank()) {
@@ -447,6 +384,158 @@ fun WizardStep3ReviewAndResult(
     }
 
     Spacer(modifier = Modifier.height(8.dp))
+  }
+}
+
+@Composable
+private fun FixedMaterialWithCustomInputRow(
+  title: String,
+  subtitle: String,
+  currentDisplayValue: String,
+  defaultValue: String,
+  unitLabel: String,
+  inputPlaceholder: String,
+  testTagPrefix: String,
+  onSaveCustomValue: (String) -> Unit,
+  onResetDefault: () -> Unit,
+  rawStoredValue: String = currentDisplayValue,
+) {
+  var isEditingCustom by remember { mutableStateOf(false) }
+  val storedDigits = rawStoredValue.filter { it.isDigit() }
+  val defaultDigits = defaultValue.filter { it.isDigit() }
+  val isCustomized = storedDigits.isNotBlank() && storedDigits != defaultDigits
+  var customDigitsInput by remember(rawStoredValue, isEditingCustom) {
+    mutableStateOf(storedDigits.ifBlank { defaultDigits })
+  }
+
+  Column(
+    modifier = Modifier.fillMaxWidth(),
+    verticalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    // Question on top
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+      Text(
+        text = title,
+        style = MaterialTheme.typography.titleSmall,
+        color = TextPrimary,
+        fontWeight = FontWeight.SemiBold,
+      )
+      Text(
+        text = subtitle,
+        style = MaterialTheme.typography.bodySmall,
+        color = TextMuted,
+      )
+    }
+
+    // Answer directly BELOW the question + '+' custom trigger
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = if (isCustomized) BannerIceBlue else SurfaceCanvas,
+        border = BorderStroke(1.dp, if (isCustomized) BrandNavy else BorderSubtle),
+      ) {
+        Text(
+          text = currentDisplayValue,
+          style = MaterialTheme.typography.labelLarge,
+          color = BrandNavy,
+          fontWeight = FontWeight.Bold,
+          modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp).testTag("${testTagPrefix}_value"),
+        )
+      }
+
+      OutlinedButton(
+        onClick = { isEditingCustom = !isEditingCustom },
+        modifier = Modifier.height(48.dp).testTag("${testTagPrefix}_plus_btn"),
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, BrandNavy),
+        contentPadding = PaddingValues(horizontal = 12.dp),
+      ) {
+        Icon(
+          imageVector = if (isEditingCustom) Icons.Outlined.Close else Icons.Filled.Add,
+          contentDescription = if (isEditingCustom) "बंद करा" else "कस्टम मोजमाप जोडा",
+          tint = BrandNavy,
+          modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+          text = if (isEditingCustom) "बंद" else "कस्टम",
+          color = BrandNavy,
+          style = MaterialTheme.typography.labelMedium,
+          fontWeight = FontWeight.Bold,
+        )
+      }
+
+      if (isCustomized) {
+        TextButton(
+          onClick = {
+            customDigitsInput = defaultDigits
+            onResetDefault()
+            isEditingCustom = false
+          },
+          modifier = Modifier.height(48.dp).testTag("${testTagPrefix}_reset_btn"),
+        ) {
+          Icon(
+            imageVector = Icons.Outlined.RestartAlt,
+            contentDescription = "डीफॉल्ट",
+            tint = BrandCrimson,
+            modifier = Modifier.size(16.dp),
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("रीसेट", color = BrandCrimson, fontWeight = FontWeight.Bold)
+        }
+      }
+    }
+
+    AnimatedVisibility(visible = isEditingCustom) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        OutlinedTextField(
+          value = customDigitsInput,
+          onValueChange = { typed ->
+            customDigitsInput = typed.filter { it.isDigit() }.take(4)
+          },
+          modifier = Modifier.weight(1f).testTag("${testTagPrefix}_input"),
+          label = { Text("एकूण $unitLabel संख्या") },
+          placeholder = { Text(inputPlaceholder, color = TextMuted) },
+          suffix = { Text(unitLabel, color = TextSecondary, fontWeight = FontWeight.SemiBold) },
+          singleLine = true,
+          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+          shape = RoundedCornerShape(12.dp),
+          colors =
+            OutlinedTextFieldDefaults.colors(
+              focusedBorderColor = BrandNavy,
+              unfocusedBorderColor = BorderSubtle,
+            ),
+        )
+
+        androidx.compose.material3.Button(
+          onClick = {
+            val numeric = customDigitsInput.toIntOrNull()
+            if (numeric != null && numeric > 0) {
+              onSaveCustomValue(numeric.toString())
+              isEditingCustom = false
+            }
+          },
+          enabled = (customDigitsInput.toIntOrNull() ?: 0) > 0,
+          modifier = Modifier.height(52.dp).testTag("${testTagPrefix}_add_btn"),
+          shape = RoundedCornerShape(12.dp),
+          colors =
+            androidx.compose.material3.ButtonDefaults.buttonColors(
+              containerColor = BrandNavy,
+              contentColor = androidx.compose.ui.graphics.Color.White,
+            ),
+        ) {
+          Text("जोडा", fontWeight = FontWeight.Bold)
+        }
+      }
+    }
   }
 }
 

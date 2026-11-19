@@ -3,4 +3,10 @@
     <cache-path
         name="survey_photos"
         path="survey_photos/" />
+    <cache-path
+        name="survey_pdfs"
+        path="survey_pdfs/" />
+    <cache-path
+        name="cache_root"
+        path="." />
 </paths>
