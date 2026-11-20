@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -31,6 +32,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import com.example.model.CustomerSurvey
 import com.example.model.SurveyCategory
 import com.example.ui.components.StatusPillBadge
+import com.example.ui.components.SyncErrorRetryBanner
 import com.example.ui.theme.BorderSubtle
 import com.example.ui.theme.BrandCrimson
 import com.example.ui.theme.BrandNavy
@@ -50,12 +53,17 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.viewmodel.CustomerStatusFilter
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CustomerListScreen(
   searchQuery: String,
   selectedCategory: SurveyCategory?,
   selectedStatus: CustomerStatusFilter,
   surveys: List<CustomerSurvey>,
+  isCloudConfigured: Boolean = false,
+  isSyncing: Boolean = false,
+  syncErrorMessage: String? = null,
+  onRefresh: () -> Unit = {},
   onSearchChange: (String) -> Unit,
   onCategorySelect: (SurveyCategory?) -> Unit,
   onStatusSelect: (CustomerStatusFilter) -> Unit,
@@ -63,12 +71,22 @@ fun CustomerListScreen(
   onDeleteClick: (CustomerSurvey) -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+  PullToRefreshBox(
+    isRefreshing = isSyncing,
+    onRefresh = { if (isCloudConfigured) onRefresh() },
+    modifier = modifier.fillMaxSize(),
+    contentAlignment = Alignment.TopCenter,
+  ) {
     Column(modifier = Modifier.widthIn(max = 600.dp).fillMaxSize()) {
       Column(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
+        SyncErrorRetryBanner(
+          errorMessage = syncErrorMessage,
+          isSyncing = isSyncing,
+          onRetry = onRefresh,
+        )
         OutlinedTextField(
           value = searchQuery,
           onValueChange = onSearchChange,

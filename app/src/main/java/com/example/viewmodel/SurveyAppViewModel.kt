@@ -2,9 +2,22 @@ package com.example.viewmodel
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import com.example.data.InMemorySurveyRepository
 import com.example.data.LocationRepository
 import com.example.data.SurveyRepository
+import com.example.data.local.OfflineLocalStorage
+import com.example.data.local.OfflinePendingQueue
+import com.example.data.remote.AccessRevokedException
+import com.example.data.remote.CloudSyncSnapshot
+import com.example.data.remote.CustomVillageRecord
+import com.example.data.remote.PersistedSupabaseSession
+import com.example.data.remote.SessionRestoreResult
+import com.example.data.remote.SupabaseConfig
+import com.example.data.remote.SupabaseHttpException
+import com.example.data.remote.SupabaseSettings
+import com.example.data.remote.SupabaseSurveyRepository
+import java.io.IOException
 import com.example.domain.SurveyRuleEngine
 import com.example.model.AppScreen
 import com.example.model.CasteCategory
@@ -49,6 +62,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import okhttp3.OkHttpClient
 
 enum class CustomerStatusFilter(val labelMr: String) {
   ALL("सर्व"),
@@ -113,9 +128,8 @@ data class InstallationFormState(
   val products: List<InstallationProductRow> = defaultInstallationProductRows(),
   val installerName: String = "Vikram Kulkarni",
   val installerSignatureStrokes: List<List<Pair<Float, Float>>> = emptyList(),
-  val accountantName: String = "",
-  val managerName: String = "",
   val supervisorName: String = "",
+  val managerName: String = "",
   val customerSignatureStrokes: List<List<Pair<Float, Float>>> = emptyList(),
   val inverterSerial: SerialVerificationField = SerialVerificationField(),
   val generationMeterSerial: SerialVerificationField = SerialVerificationField(),
@@ -167,15 +181,32 @@ data class SurveyAppUiState(
   val approvedCategory1Surveys: List<CustomerSurvey> = emptyList(),
   val installationReports: List<InstallationReport> = emptyList(),
   val installationSearchQuery: String = "",
-  val installationFilter: InstallationQueueFilter = InstallationQueueFilter.ALL,
+  val installationFilter: InstallationQueueFilter = InstallationQueueFilter.PENDING,
   val installationForm: InstallationFormState = InstallationFormState(),
+  val isCloudConfigured: Boolean = false,
+  val isRestoringSession: Boolean = false,
+  val isAuthenticating: Boolean = false,
+  val isSyncing: Boolean = false,
+  val pendingSyncCount: Int = 0,
+  val syncErrorMessage: String? = null,
+  val isSavingSurvey: Boolean = false,
+  val isSavingInstallation: Boolean = false,
   val snackbarMessage: String? = null,
 )
 
-class SurveyAppViewModel(application: Application) : AndroidViewModel(application) {
+class SurveyAppViewModel @JvmOverloads constructor(
+  application: Application,
+  private val supabaseSettings: SupabaseSettings = SupabaseConfig.fromBuildConfig(),
+  httpClient: OkHttpClient? = null,
+) : AndroidViewModel(application) {
 
   private val locationRepository = LocationRepository(application.applicationContext)
   private val surveyRepository: SurveyRepository = InMemorySurveyRepository()
+  private val offlineStorage = OfflineLocalStorage(application.applicationContext)
+  private val cloudRepository =
+    SupabaseSurveyRepository(application.applicationContext, supabaseSettings, httpClient)
+  private val isCloudMode: Boolean
+    get() = cloudRepository.isEnabled
 
   private val _uiState = MutableStateFlow(SurveyAppUiState())
   val uiState: StateFlow<SurveyAppUiState> = _uiState.asStateFlow()
@@ -187,34 +218,454 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
       defaultDistrict?.talukas?.find { it.id == "nagar" } ?: defaultDistrict?.talukas?.firstOrNull()
     val defaultVillage =
       defaultTaluka?.villages?.find { it.id == "ng_19" } ?: defaultTaluka?.villages?.firstOrNull()
+    val hasSavedSession = cloudRepository.hasSavedSessionFast()
 
-    _uiState.update {
-      it.copy(
-        executive = surveyRepository.getExecutive(),
-        installationExecutive = surveyRepository.getInstallationExecutive(),
-        districts = districts,
-        selectedDistrict = defaultDistrict,
-        selectedTaluka = defaultTaluka,
-        selectedVillage = defaultVillage,
-        allSurveys = surveyRepository.surveys.value,
-        installationReports = surveyRepository.installationReports.value,
+    if (isCloudMode) {
+      _uiState.update {
+        it.copy(
+          isCloudConfigured = true,
+          isRestoringSession = hasSavedSession,
+          isAuthenticating = hasSavedSession,
+          loginEmail = "",
+          loginPassword = "",
+          districts = districts,
+          selectedDistrict = defaultDistrict,
+          selectedTaluka = defaultTaluka,
+          selectedVillage = defaultVillage,
+          allSurveys = emptyList(),
+          installationReports = emptyList(),
+        )
+      }
+      viewModelScope.launch {
+        runCatching { cloudRepository.tryRestoreSession() }
+          .onSuccess { result ->
+            when (result) {
+              is SessionRestoreResult.NoSession -> {
+                _uiState.update {
+                  it.copy(
+                    isRestoringSession = false,
+                    isAuthenticating = false,
+                  )
+                }
+              }
+
+              is SessionRestoreResult.RestoredOnline -> {
+                val session = result.session
+                val flushed = runCatching { flushPendingOfflineQueue(session.loginRole) }.getOrNull()
+                val snapshot =
+                  if (flushed != null && flushed.first > 0) {
+                    runCatching { cloudRepository.syncAll() }.getOrDefault(result.snapshot)
+                  } else {
+                    result.snapshot
+                  }
+                val savedVillage = resolveSavedScreenAndLocation(session, snapshot.customVillages)
+                applyCloudSnapshot(
+                  snapshot = snapshot,
+                  exec = session.executive,
+                  role = session.loginRole,
+                  nextScreen = savedVillage.first,
+                  preferAssignedArea = !savedVillage.second,
+                  forcedDistrictId = session.lastDistrictId.takeIf { savedVillage.second },
+                  forcedTalukaId = session.lastTalukaId.takeIf { savedVillage.second },
+                  forcedVillageId = session.lastVillageId.takeIf { savedVillage.second },
+                )
+              }
+
+              is SessionRestoreResult.RestoredOfflineFallback -> {
+                val session = result.session
+                val cached = offlineStorage.loadCache()
+                val pending = offlineStorage.loadPendingQueue()
+                val mergedVillages = (cached.customVillages + pending.pendingCustomVillages).distinctBy { it.id }
+                val savedVillage = resolveSavedScreenAndLocation(session, mergedVillages)
+                applyOfflineRestoredCloudSession(
+                  session = session,
+                  nextScreen = savedVillage.first,
+                  useSavedLocation = savedVillage.second,
+                  offlineMessageMr = result.offlineMessageMr,
+                  cachedSurveys = mergeSurveysWithPending(cached.surveys, pending.pendingSurveys),
+                  cachedReports = mergeReportsWithPending(cached.installationReports, pending.pendingReports),
+                  pendingCount = pending.totalCount,
+                )
+              }
+            }
+          }
+          .onFailure { err ->
+            if (err is AccessRevokedException) {
+              handleAccessRevoked(err.message ?: SupabaseSurveyRepository.ACCESS_REVOKED_MESSAGE_MR)
+            } else {
+              _uiState.update {
+                it.copy(
+                  isRestoringSession = false,
+                  isAuthenticating = false,
+                )
+              }
+            }
+          }
+      }
+    } else {
+      _uiState.update {
+        it.copy(
+          isCloudConfigured = false,
+          isRestoringSession = hasSavedSession,
+          executive = surveyRepository.getExecutive(),
+          installationExecutive = surveyRepository.getInstallationExecutive(),
+          districts = districts,
+          selectedDistrict = defaultDistrict,
+          selectedTaluka = defaultTaluka,
+          selectedVillage = defaultVillage,
+          allSurveys = surveyRepository.surveys.value,
+          installationReports = surveyRepository.installationReports.value,
+        )
+      }
+      recomputeDerivedCollections()
+      if (hasSavedSession) {
+        viewModelScope.launch {
+          val saved = runCatching { cloudRepository.loadOfflineDemoSession() }.getOrNull()
+          if (saved != null) {
+            val (nextScreen, hasLastVillage) = resolveSavedScreenAndLocation(saved, emptyList())
+            val allDistricts = locationRepository.getDistricts()
+            val d = if (hasLastVillage) allDistricts.find { it.id == saved.lastDistrictId } else null
+            val t = if (hasLastVillage) d?.talukas?.find { it.id == saved.lastTalukaId } else null
+            val v = if (hasLastVillage) t?.villages?.find { it.id == saved.lastVillageId } else null
+            _uiState.update { cur ->
+              cur.copy(
+                loginRole = saved.loginRole,
+                currentScreen = nextScreen,
+                activeInstallationTab = InstallationTab.HOME,
+                selectedDistrict = d ?: cur.selectedDistrict,
+                selectedTaluka = t ?: cur.selectedTaluka,
+                selectedVillage = v ?: cur.selectedVillage,
+                isRestoringSession = false,
+              )
+            }
+            recomputeDerivedCollections()
+          } else {
+            _uiState.update { it.copy(isRestoringSession = false) }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Determines the destination screen on app reopen:
+   * - Solar Installation -> INSTALLATION_DASHBOARD directly.
+   * - Survey Executive -> MAIN_APP directly if their last selected village is saved and valid,
+   *   otherwise VILLAGE_SELECT.
+   */
+  private fun resolveSavedScreenAndLocation(
+    session: PersistedSupabaseSession,
+    customVillages: List<com.example.data.remote.CustomVillageRecord>,
+  ): Pair<AppScreen, Boolean> {
+    if (session.loginRole == LoginRole.SOLAR_INSTALLATION) {
+      return AppScreen.INSTALLATION_DASHBOARD to false
+    }
+    if (customVillages.isNotEmpty()) {
+      locationRepository.mergeCustomVillages(customVillages)
+    }
+    val allDistricts = locationRepository.getDistricts()
+    val savedDistrict = allDistricts.find { it.id == session.lastDistrictId }
+    val savedTaluka = savedDistrict?.talukas?.find { it.id == session.lastTalukaId }
+    val savedVillage = savedTaluka?.villages?.find { it.id == session.lastVillageId }
+    return if (savedDistrict != null && savedTaluka != null && savedVillage != null) {
+      AppScreen.MAIN_APP to true
+    } else {
+      AppScreen.VILLAGE_SELECT to false
+    }
+  }
+
+  private fun applyOfflineRestoredCloudSession(
+    session: PersistedSupabaseSession,
+    nextScreen: AppScreen,
+    useSavedLocation: Boolean,
+    offlineMessageMr: String,
+    cachedSurveys: List<CustomerSurvey> = emptyList(),
+    cachedReports: List<InstallationReport> = emptyList(),
+    pendingCount: Int = 0,
+  ) {
+    val allDistricts = locationRepository.getDistricts()
+    val currentState = _uiState.value
+    val resolved =
+      locationRepository.resolveSelectionForExecutive(
+        districts = allDistricts,
+        executive = session.executive,
+        currentDistrictId = if (useSavedLocation) session.lastDistrictId else currentState.selectedDistrict?.id,
+        currentTalukaId = if (useSavedLocation) session.lastTalukaId else currentState.selectedTaluka?.id,
+        currentVillageId = if (useSavedLocation) session.lastVillageId else currentState.selectedVillage?.id,
+        preferAssignedArea = !useSavedLocation,
+      )
+    val completedLinkedIds = cachedReports.mapNotNull { it.linkedSurveyId }.toSet()
+    val visibleSurveys =
+      if (session.loginRole == LoginRole.SOLAR_INSTALLATION) {
+        cachedSurveys.filterNot { it.id in completedLinkedIds }
+      } else {
+        cachedSurveys
+      }
+    _uiState.update { state ->
+      state.copy(
+        loginRole = session.loginRole,
+        executive = if (session.loginRole == LoginRole.SURVEY_EXECUTIVE) session.executive else state.executive,
+        installationExecutive =
+          if (session.loginRole == LoginRole.SOLAR_INSTALLATION) session.executive else state.installationExecutive,
+        districts = allDistricts,
+        selectedDistrict = resolved.district,
+        selectedTaluka = resolved.taluka,
+        selectedVillage = resolved.village,
+        allSurveys = visibleSurveys,
+        installationReports = cachedReports,
+        isRestoringSession = false,
+        isAuthenticating = false,
+        isSyncing = false,
+        pendingSyncCount = pendingCount,
+        syncErrorMessage = offlineMessageMr,
+        loginError = null,
+        currentScreen = nextScreen,
+        activeInstallationTab =
+          if (nextScreen == AppScreen.INSTALLATION_DASHBOARD) InstallationTab.HOME
+          else state.activeInstallationTab,
+        installationFilter =
+          if (nextScreen == AppScreen.INSTALLATION_DASHBOARD) InstallationQueueFilter.PENDING
+          else state.installationFilter,
       )
     }
     recomputeDerivedCollections()
+  }
+
+  private suspend fun applyCloudSnapshot(
+    snapshot: CloudSyncSnapshot,
+    exec: ExecutiveUser,
+    role: LoginRole,
+    nextScreen: AppScreen? = null,
+    preferAssignedArea: Boolean = false,
+    forcedDistrictId: String? = null,
+    forcedTalukaId: String? = null,
+    forcedVillageId: String? = null,
+  ) {
+    val pending = offlineStorage.loadPendingQueue()
+    val mergedVillages = (snapshot.customVillages + pending.pendingCustomVillages).distinctBy { it.id }
+    val mergedReports = mergeReportsWithPending(snapshot.installationReports, pending.pendingReports)
+    val completedLinkedIds = mergedReports.mapNotNull { it.linkedSurveyId }.toSet()
+    val mergedSurveys =
+      if (role == LoginRole.SOLAR_INSTALLATION) {
+        snapshot.surveys.filterNot { it.id in completedLinkedIds }
+      } else {
+        mergeSurveysWithPending(snapshot.surveys, pending.pendingSurveys)
+      }
+
+    offlineStorage.saveCache(
+      surveys = mergedSurveys,
+      installationReports = mergedReports,
+      customVillages = mergedVillages,
+    )
+
+    locationRepository.mergeCustomVillages(mergedVillages)
+    val refreshedDistricts = locationRepository.getDistricts()
+    val currentState = _uiState.value
+    val resolved =
+      locationRepository.resolveSelectionForExecutive(
+        districts = refreshedDistricts,
+        executive = exec,
+        currentDistrictId = forcedDistrictId ?: currentState.selectedDistrict?.id,
+        currentTalukaId = forcedTalukaId ?: currentState.selectedTaluka?.id,
+        currentVillageId = forcedVillageId ?: currentState.selectedVillage?.id,
+        preferAssignedArea = preferAssignedArea,
+      )
+
+    _uiState.update { state ->
+      state.copy(
+        loginRole = role,
+        executive = if (role == LoginRole.SURVEY_EXECUTIVE) exec else state.executive,
+        installationExecutive = if (role == LoginRole.SOLAR_INSTALLATION) exec else state.installationExecutive,
+        districts = refreshedDistricts,
+        selectedDistrict = resolved.district,
+        selectedTaluka = resolved.taluka,
+        selectedVillage = resolved.village,
+        allSurveys = mergedSurveys,
+        installationReports = mergedReports,
+        isRestoringSession = false,
+        isAuthenticating = false,
+        isSyncing = false,
+        pendingSyncCount = pending.totalCount,
+        syncErrorMessage = null,
+        loginError = null,
+        currentScreen = nextScreen ?: state.currentScreen,
+        activeInstallationTab =
+          if (nextScreen == AppScreen.INSTALLATION_DASHBOARD) InstallationTab.HOME
+          else state.activeInstallationTab,
+        installationFilter =
+          if (nextScreen == AppScreen.INSTALLATION_DASHBOARD) InstallationQueueFilter.PENDING
+          else state.installationFilter,
+      )
+    }
+    recomputeDerivedCollections()
+  }
+
+  private fun mergeSurveysWithPending(
+    base: List<CustomerSurvey>,
+    pending: List<CustomerSurvey>,
+  ): List<CustomerSurvey> {
+    if (pending.isEmpty()) return base
+    val pendingById = pending.associateBy { it.id }
+    val baseWithoutPending = base.filterNot { it.id in pendingById }
+    return pending + baseWithoutPending
+  }
+
+  private fun mergeReportsWithPending(
+    base: List<InstallationReport>,
+    pending: List<InstallationReport>,
+  ): List<InstallationReport> {
+    if (pending.isEmpty()) return base
+    val pendingById = pending.associateBy { it.id }
+    val baseWithoutPending = base.filterNot { it.id in pendingById }
+    return pending + baseWithoutPending
+  }
+
+  private fun isLikelyOfflineError(err: Throwable): Boolean {
+    if (err is AccessRevokedException) return false
+    if (err is IOException) return true
+    if (err is SupabaseHttpException) return err.statusCode >= 500 || err.statusCode == 408
+    val cause = err.cause
+    if (cause is IOException) return true
+    return false
+  }
+
+  /**
+   * Uploads all locally saved offline custom villages, surveys (+ images), and installation
+   * reports (+ images) to Supabase + Cloudflare R2. Returns Pair(syncedCount, remainingCount).
+   */
+  private suspend fun flushPendingOfflineQueue(role: LoginRole): Pair<Int, Int> {
+    var queue: OfflinePendingQueue = offlineStorage.loadPendingQueue()
+    if (queue.totalCount == 0) return 0 to 0
+
+    var syncedCount = 0
+
+    if (role == LoginRole.SURVEY_EXECUTIVE) {
+      for (village in queue.pendingCustomVillages) {
+        try {
+          cloudRepository.saveCustomVillage(
+            districtId = village.districtId,
+            districtNameMr = village.districtNameMr,
+            talukaId = village.talukaId,
+            talukaNameMr = village.talukaNameMr,
+            villageId = village.id,
+            villageNameMr = village.villageNameMr,
+          )
+          queue = offlineStorage.removePendingCustomVillage(village.id)
+          syncedCount++
+        } catch (revoked: AccessRevokedException) {
+          throw revoked
+        } catch (err: Throwable) {
+          if (isLikelyOfflineError(err)) return syncedCount to queue.totalCount
+        }
+      }
+
+      for (survey in queue.pendingSurveys) {
+        try {
+          cloudRepository.saveSurveyWithUploads(survey, previousSurvey = null)
+          offlineStorage.cleanupOfflinePhotosForSurvey(survey)
+          queue = offlineStorage.removePendingSurvey(survey.id)
+          syncedCount++
+        } catch (revoked: AccessRevokedException) {
+          throw revoked
+        } catch (err: Throwable) {
+          if (isLikelyOfflineError(err)) return syncedCount to queue.totalCount
+        }
+      }
+    }
+
+    if (role == LoginRole.SOLAR_INSTALLATION) {
+      for (report in queue.pendingReports) {
+        try {
+          cloudRepository.saveInstallationReportWithUploads(report, previousReport = null)
+          offlineStorage.cleanupOfflinePhotosForReport(report)
+          queue = offlineStorage.removePendingReport(report.id)
+          syncedCount++
+        } catch (revoked: AccessRevokedException) {
+          throw revoked
+        } catch (err: Throwable) {
+          if (isLikelyOfflineError(err)) return syncedCount to queue.totalCount
+        }
+      }
+    }
+
+    return syncedCount to queue.totalCount
+  }
+
+  private fun handleAccessRevoked(message: String) {
+    viewModelScope.launch { runCatching { offlineStorage.clearAll() } }
+    _uiState.update { state ->
+      state.copy(
+        currentScreen = AppScreen.LOGIN,
+        activeTab = MainTab.HOME,
+        activeInstallationTab = InstallationTab.HOME,
+        loginPassword = "",
+        loginError = message,
+        isRestoringSession = false,
+        isAuthenticating = false,
+        isSyncing = false,
+        pendingSyncCount = 0,
+        syncErrorMessage = null,
+        isSavingSurvey = false,
+        isSavingInstallation = false,
+        selectedDetailSurvey = null,
+        pendingDeleteSurvey = null,
+        wizard = AddEditWizardState(),
+        installationForm = InstallationFormState(),
+        allSurveys = emptyList(),
+        activeVillageSurveys = emptyList(),
+        filteredListSurveys = emptyList(),
+        approvedCategory1Surveys = emptyList(),
+        installationReports = emptyList(),
+        snackbarMessage = null,
+      )
+    }
+  }
+
+  /**
+   * Called on Activity Lifecycle ON_RESUME to re-verify `public.executives` (`is_active == true`
+   * and matching `role`). Immediately signs out and routes to LOGIN if revoked by Office Admin.
+   */
+  fun onAppForegroundResume() {
+    val state = _uiState.value
+    if (!isCloudMode || state.currentScreen == AppScreen.LOGIN || state.isAuthenticating) return
+    viewModelScope.launch {
+      runCatching { cloudRepository.verifyCurrentSessionOnResume() }
+        .onSuccess { freshExec ->
+          if (freshExec != null) {
+            _uiState.update { cur ->
+              cur.copy(
+                executive = if (cur.loginRole == LoginRole.SURVEY_EXECUTIVE) freshExec else cur.executive,
+                installationExecutive =
+                  if (cur.loginRole == LoginRole.SOLAR_INSTALLATION) freshExec else cur.installationExecutive,
+              )
+            }
+          }
+        }
+        .onFailure { err ->
+          if (err is AccessRevokedException) {
+            handleAccessRevoked(err.message ?: SupabaseSurveyRepository.ACCESS_REVOKED_MESSAGE_MR)
+          }
+        }
+    }
   }
 
   fun selectLoginRole(role: LoginRole) {
     _uiState.update { state ->
       if (state.loginRole == role) return@update state
       val nextEmail =
-        when (role) {
-          LoginRole.SURVEY_EXECUTIVE -> state.executive.email
-          LoginRole.SOLAR_INSTALLATION -> state.installationExecutive.email
+        if (isCloudMode) {
+          state.loginEmail
+        } else {
+          when (role) {
+            LoginRole.SURVEY_EXECUTIVE -> state.executive.email
+            LoginRole.SOLAR_INSTALLATION -> state.installationExecutive.email
+          }
         }
       state.copy(
         loginRole = role,
         loginEmail = nextEmail,
-        loginPassword = if (state.loginPassword.isBlank()) "123456" else state.loginPassword,
+        loginPassword =
+          if (!isCloudMode && state.loginPassword.isBlank()) "123456" else state.loginPassword,
         loginError = null,
       )
     }
@@ -230,6 +681,7 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
 
   fun submitLogin() {
     val state = _uiState.value
+    if (state.isAuthenticating) return
     val isInstallation = state.loginRole == LoginRole.SOLAR_INSTALLATION
     if (state.loginEmail.isBlank() || !state.loginEmail.contains("@")) {
       _uiState.update {
@@ -253,29 +705,129 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
     }
     val nextScreen =
       if (isInstallation) AppScreen.INSTALLATION_DASHBOARD else AppScreen.VILLAGE_SELECT
-    _uiState.update {
-      it.copy(
-        loginError = null,
-        currentScreen = nextScreen,
-        activeInstallationTab = InstallationTab.HOME,
-      )
+
+    if (!isCloudMode) {
+      val demoExec =
+        if (isInstallation) state.installationExecutive else state.executive
+      viewModelScope.launch {
+        runCatching { cloudRepository.saveOfflineDemoSession(state.loginRole, demoExec) }
+      }
+      _uiState.update {
+        it.copy(
+          loginError = null,
+          currentScreen = nextScreen,
+          activeInstallationTab = InstallationTab.HOME,
+        )
+      }
+      return
+    }
+
+    _uiState.update { it.copy(isAuthenticating = true, loginError = null) }
+    viewModelScope.launch {
+      runCatching {
+        cloudRepository.signInAndVerifyExecutive(
+          email = state.loginEmail,
+          password = state.loginPassword,
+          requestedRole = state.loginRole,
+        )
+      }.onSuccess { (exec, snapshot) ->
+        applyCloudSnapshot(
+          snapshot = snapshot,
+          exec = exec,
+          role = state.loginRole,
+          nextScreen = nextScreen,
+          preferAssignedArea = true,
+        )
+      }.onFailure { err ->
+        _uiState.update {
+          it.copy(
+            isAuthenticating = false,
+            loginError = err.message ?: "लॉगिन अयशस्वी. कृपया ईमेल व पासवर्ड तपासा.",
+          )
+        }
+      }
+    }
+  }
+
+  fun refreshCloudData() {
+    if (_uiState.value.isSyncing) return
+    if (!isCloudMode) {
+      recomputeDerivedCollections()
+      showMessage("स्थानिक (मोबाईल) डेटा अद्ययावत आहे.")
+      return
+    }
+    val role = _uiState.value.loginRole
+    val exec =
+      if (role == LoginRole.SOLAR_INSTALLATION) _uiState.value.installationExecutive
+      else _uiState.value.executive
+    _uiState.update { it.copy(isSyncing = true, syncErrorMessage = null) }
+    viewModelScope.launch {
+      runCatching {
+        val (syncedOfflineCount, remainingOfflineCount) = flushPendingOfflineQueue(role)
+        val snapshot = cloudRepository.syncAll()
+        Triple(snapshot, syncedOfflineCount, remainingOfflineCount)
+      }
+        .onSuccess { (snapshot, syncedOfflineCount, _) ->
+          applyCloudSnapshot(
+            snapshot = snapshot,
+            exec = snapshot.refreshedExecutive ?: exec,
+            role = role,
+            preferAssignedArea = false,
+          )
+          val msg =
+            if (syncedOfflineCount > 0) {
+              "ऑफलाइन जतन केलेले $syncedOfflineCount फॉर्म व क्लाउड डेटा यशस्वीरित्या सिंक झाले!"
+            } else {
+              "क्लाउड डेटा सिंक झाला."
+            }
+          showMessage(msg)
+        }
+        .onFailure { err ->
+          if (err is AccessRevokedException) {
+            handleAccessRevoked(err.message ?: SupabaseSurveyRepository.ACCESS_REVOKED_MESSAGE_MR)
+          } else {
+            val remainingCount = runCatching { offlineStorage.loadPendingQueue().totalCount }.getOrDefault(_uiState.value.pendingSyncCount)
+            _uiState.update {
+              it.copy(
+                isSyncing = false,
+                pendingSyncCount = remainingCount,
+                syncErrorMessage =
+                  if (remainingCount > 0) {
+                    "इंटरनेट उपलब्ध नाही — $remainingCount फॉर्म मोबाईलमध्ये सुरक्षित आहेत. नेटवर्क आल्यावर रिफ्रेश (↻) करा."
+                  } else {
+                    "डेटा सिंक झाला नाही. कृपया इंटरनेट तपासा आणि पुन्हा प्रयत्न करा."
+                  },
+              )
+            }
+          }
+        }
     }
   }
 
   fun logout() {
+    viewModelScope.launch {
+      cloudRepository.signOut()
+      runCatching { offlineStorage.clearAll() }
+    }
     _uiState.update { state ->
       val defaultEmail =
-        if (state.loginRole == LoginRole.SOLAR_INSTALLATION) state.installationExecutive.email
+        if (isCloudMode) ""
+        else if (state.loginRole == LoginRole.SOLAR_INSTALLATION) state.installationExecutive.email
         else state.executive.email
       state.copy(
         currentScreen = AppScreen.LOGIN,
         activeTab = MainTab.HOME,
         activeInstallationTab = InstallationTab.HOME,
         loginEmail = defaultEmail,
+        loginPassword = if (isCloudMode) "" else state.loginPassword,
         loginError = null,
+        pendingSyncCount = 0,
+        syncErrorMessage = null,
         selectedDetailSurvey = null,
         wizard = AddEditWizardState(),
         installationForm = InstallationFormState(),
+        allSurveys = if (isCloudMode) emptyList() else state.allSurveys,
+        installationReports = if (isCloudMode) emptyList() else state.installationReports,
       )
     }
   }
@@ -321,10 +873,55 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
       )
     }
     recomputeDerivedCollections()
+    if (isCloudMode) {
+      viewModelScope.launch {
+        runCatching {
+          cloudRepository.saveCustomVillage(
+            districtId = district.id,
+            districtNameMr = district.nameMr,
+            talukaId = taluka.id,
+            talukaNameMr = taluka.nameMr,
+            villageId = created.id,
+            villageNameMr = created.nameMr,
+          )
+        }.onFailure { err ->
+          if (err is AccessRevokedException) {
+            handleAccessRevoked(err.message ?: SupabaseSurveyRepository.ACCESS_REVOKED_MESSAGE_MR)
+          } else if (isLikelyOfflineError(err)) {
+            val queue =
+              offlineStorage.enqueuePendingCustomVillage(
+                CustomVillageRecord(
+                  id = created.id,
+                  districtId = district.id,
+                  districtNameMr = district.nameMr,
+                  talukaId = taluka.id,
+                  talukaNameMr = taluka.nameMr,
+                  villageNameMr = created.nameMr,
+                  villageNameEn = created.nameEn,
+                )
+              )
+            _uiState.update { it.copy(pendingSyncCount = queue.totalCount) }
+            showMessage("इंटरनेट नाही — नवीन गाव मोबाईलमध्ये जतन झाले आहे (सिंक बाकी).")
+          } else {
+            showMessage("गाव Supabase वर सेव्ह झाले नाही: ${err.message}")
+          }
+        }
+      }
+    }
   }
 
   fun proceedToDashboard() {
-    if (_uiState.value.selectedVillage == null) return
+    val state = _uiState.value
+    val district = state.selectedDistrict
+    val taluka = state.selectedTaluka
+    val village = state.selectedVillage ?: return
+    if (district != null && taluka != null) {
+      viewModelScope.launch {
+        runCatching {
+          cloudRepository.saveLastSelectedLocation(district.id, taluka.id, village.id)
+        }
+      }
+    }
     _uiState.update { it.copy(currentScreen = AppScreen.MAIN_APP, activeTab = MainTab.HOME) }
     recomputeDerivedCollections()
   }
@@ -388,21 +985,56 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
       add(target.siteSurveyDetails.noteCamEarthingWithOwnerPhotoUri)
     }
     ImageCompressionUtil.deleteCachedPhotos(getApplication(), photoUris)
-    surveyRepository.deleteSurvey(target.id)
 
-    _uiState.update { state ->
-      state.copy(
-        allSurveys = surveyRepository.surveys.value,
-        pendingDeleteSurvey = null,
-        selectedDetailSurvey =
-          if (state.selectedDetailSurvey?.id == target.id) null else state.selectedDetailSurvey,
-        wizard =
-          if (state.wizard.isOpen && state.wizard.editingSurveyId == target.id) AddEditWizardState()
-          else state.wizard,
-        snackbarMessage = "${target.beneficiaryName} यांची सर्व माहिती व कागदपत्रे कायमची हटवली.",
-      )
+    if (!isCloudMode) {
+      surveyRepository.deleteSurvey(target.id)
+      _uiState.update { state ->
+        state.copy(
+          allSurveys = surveyRepository.surveys.value,
+          pendingDeleteSurvey = null,
+          selectedDetailSurvey =
+            if (state.selectedDetailSurvey?.id == target.id) null else state.selectedDetailSurvey,
+          wizard =
+            if (state.wizard.isOpen && state.wizard.editingSurveyId == target.id) AddEditWizardState()
+            else state.wizard,
+          snackbarMessage = "${target.beneficiaryName} यांची सर्व माहिती व कागदपत्रे कायमची हटवली.",
+        )
+      }
+      recomputeDerivedCollections()
+      return
     }
-    recomputeDerivedCollections()
+
+    _uiState.update { it.copy(pendingDeleteSurvey = null, isSyncing = true) }
+    viewModelScope.launch {
+      runCatching { cloudRepository.deleteSurveyWithUploads(target) }
+        .onSuccess {
+          _uiState.update { state ->
+            state.copy(
+              isSyncing = false,
+              allSurveys = state.allSurveys.filterNot { it.id == target.id },
+              selectedDetailSurvey =
+                if (state.selectedDetailSurvey?.id == target.id) null else state.selectedDetailSurvey,
+              wizard =
+                if (state.wizard.isOpen && state.wizard.editingSurveyId == target.id) AddEditWizardState()
+                else state.wizard,
+              snackbarMessage = "${target.beneficiaryName} यांची सर्व माहिती व R2 फोटो कायमचे हटवले.",
+            )
+          }
+          recomputeDerivedCollections()
+        }
+        .onFailure { err ->
+          if (err is AccessRevokedException) {
+            handleAccessRevoked(err.message ?: SupabaseSurveyRepository.ACCESS_REVOKED_MESSAGE_MR)
+          } else {
+            _uiState.update {
+              it.copy(
+                isSyncing = false,
+                snackbarMessage = "डिलीट करताना त्रुटी आली: ${err.message}",
+              )
+            }
+          }
+        }
+    }
   }
 
   fun openNewSurveyWizard() {
@@ -708,6 +1340,7 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
 
   fun saveWizardSurvey() {
     val state = _uiState.value
+    if (state.isSavingSurvey) return
     val w = state.wizard
     val district = state.selectedDistrict ?: return
     val taluka = state.selectedTaluka ?: return
@@ -720,6 +1353,7 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
       return
     }
 
+    val existing = w.editingSurveyId?.let { id -> state.allSurveys.firstOrNull { it.id == id } }
     val finalCategory = w.suggestedCategory
     val pending =
       SurveyRuleEngine.computePendingActions(
@@ -733,7 +1367,8 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
 
     val saved =
       CustomerSurvey(
-        id = w.editingSurveyId ?: "cust_${System.currentTimeMillis()}",
+        id = w.editingSurveyId ?: "survey_${System.currentTimeMillis()}_${(100..999).random()}",
+        executiveId = existing?.executiveId ?: state.executive.id.takeIf { it.isNotBlank() },
         villageId = village.id,
         villageNameMr = village.nameMr,
         talukaNameMr = taluka.nameMr,
@@ -762,19 +1397,99 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
         overallStatus = overall,
         pendingActions = pending,
         executiveRemark = w.executiveRemark.trim(),
-        surveyDateLabel = "आज",
-        isSurveyedToday = true,
+        govFormCompleted = existing?.govFormCompleted ?: false,
+        govFormCompletedAt = existing?.govFormCompletedAt,
+        surveyDateLabel = existing?.surveyDateLabel ?: "आज",
+        isSurveyedToday = existing?.isSurveyedToday ?: true,
       )
 
-    surveyRepository.saveSurvey(saved)
-    _uiState.update {
-      it.copy(
-        allSurveys = surveyRepository.surveys.value,
-        wizard = AddEditWizardState(),
-        snackbarMessage = "${saved.beneficiaryName} यांचा सर्व्हे (${finalCategory.shortTagMr}) जतन झाला.",
-      )
+    if (!isCloudMode) {
+      surveyRepository.saveSurvey(saved)
+      _uiState.update {
+        it.copy(
+          allSurveys = surveyRepository.surveys.value,
+          wizard = AddEditWizardState(),
+          snackbarMessage = "${saved.beneficiaryName} यांचा सर्व्हे (${finalCategory.shortTagMr}) जतन झाला.",
+        )
+      }
+      recomputeDerivedCollections()
+      return
     }
-    recomputeDerivedCollections()
+
+    _uiState.update { it.copy(isSavingSurvey = true, wizard = w.copy(validationError = null)) }
+    viewModelScope.launch {
+      runCatching { cloudRepository.saveSurveyWithUploads(saved, previousSurvey = existing) }
+        .onSuccess { cloudSaved ->
+          offlineStorage.removePendingSurvey(cloudSaved.id)
+          val remainingPending = offlineStorage.loadPendingQueue().totalCount
+          var updatedSurveysForCache: List<CustomerSurvey> = emptyList()
+          _uiState.update { cur ->
+            val updatedList =
+              cur.allSurveys.toMutableList().apply {
+                val idx = indexOfFirst { it.id == cloudSaved.id }
+                if (idx >= 0) set(idx, cloudSaved) else add(0, cloudSaved)
+              }
+            updatedSurveysForCache = updatedList
+            cur.copy(
+              isSavingSurvey = false,
+              allSurveys = updatedList,
+              pendingSyncCount = remainingPending,
+              wizard = AddEditWizardState(),
+              snackbarMessage = "${cloudSaved.beneficiaryName} यांचा सर्व्हे व फोटो Supabase + R2 वर जतन झाले.",
+            )
+          }
+          offlineStorage.saveCache(
+            surveys = updatedSurveysForCache,
+            installationReports = _uiState.value.installationReports,
+            customVillages = emptyList(),
+          )
+          recomputeDerivedCollections()
+        }
+        .onFailure { err ->
+          if (err is AccessRevokedException) {
+            handleAccessRevoked(err.message ?: SupabaseSurveyRepository.ACCESS_REVOKED_MESSAGE_MR)
+          } else if (isLikelyOfflineError(err)) {
+            val queue = offlineStorage.enqueuePendingSurvey(saved)
+            val durableSaved = queue.pendingSurveys.firstOrNull { it.id == saved.id } ?: saved
+            var updatedSurveysForCache: List<CustomerSurvey> = emptyList()
+            _uiState.update { cur ->
+              val updatedList =
+                cur.allSurveys.toMutableList().apply {
+                  val idx = indexOfFirst { it.id == durableSaved.id }
+                  if (idx >= 0) set(idx, durableSaved) else add(0, durableSaved)
+                }
+              updatedSurveysForCache = updatedList
+              cur.copy(
+                isSavingSurvey = false,
+                allSurveys = updatedList,
+                pendingSyncCount = queue.totalCount,
+                wizard = AddEditWizardState(),
+                syncErrorMessage =
+                  "इंटरनेट नाही — ${queue.totalCount} फॉर्म व फोटो मोबाईलमध्ये सुरक्षित जतन आहेत. नेटवर्क आल्यावर रिफ्रेश (↻) करा.",
+                snackbarMessage =
+                  "${durableSaved.beneficiaryName} यांचा सर्व्हे व फोटो ऑफलाइन (मोबाईलमध्ये) जतन झाले.",
+              )
+            }
+            offlineStorage.saveCache(
+              surveys = updatedSurveysForCache,
+              installationReports = _uiState.value.installationReports,
+              customVillages = emptyList(),
+            )
+            recomputeDerivedCollections()
+          } else {
+            _uiState.update { cur ->
+              cur.copy(
+                isSavingSurvey = false,
+                wizard =
+                  cur.wizard.copy(
+                    validationError =
+                      "Supabase / R2 अपलोड त्रुटी: ${err.message ?: "पुन्हा प्रयत्न करा"}"
+                  ),
+              )
+            }
+          }
+        }
+    }
   }
 
   fun showMessage(message: String) {
@@ -887,10 +1602,21 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
         )
 
       val reportRows = buildReportBRows(villageSurveys)
+      val effectiveReports =
+        if (isCloudMode) state.installationReports else surveyRepository.installationReports.value
+      val installedSurveyIds = effectiveReports.mapNotNull { it.linkedSurveyId }.toSet()
       val approvedCat1 =
-        state.allSurveys.filter {
-          it.finalCategory == SurveyCategory.CATEGORY_1 && it.overallStatus == OverallStatus.READY
-        }
+        state.allSurveys
+          .filter { survey ->
+            survey.finalCategory == SurveyCategory.CATEGORY_1 &&
+              survey.id !in installedSurveyIds &&
+              if (isCloudMode) {
+                survey.govFormCompleted
+              } else {
+                survey.govFormCompleted || survey.overallStatus == OverallStatus.READY
+              }
+          }
+          .sortedByDescending { it.govFormCompleted }
 
       state.copy(
         activeVillageSurveys = homeFiltered,
@@ -898,7 +1624,7 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
         villageStats = stats,
         reportBRows = reportRows,
         approvedCategory1Surveys = approvedCat1,
-        installationReports = surveyRepository.installationReports.value,
+        installationReports = effectiveReports,
       )
     }
   }
@@ -988,9 +1714,8 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
             products = report.products,
             installerName = report.installerName,
             installerSignatureStrokes = report.installerSignatureStrokes,
-            accountantName = report.accountantName,
-            managerName = report.managerName,
             supervisorName = report.supervisorName,
+            managerName = report.managerName,
             customerSignatureStrokes = report.customerSignatureStrokes,
             inverterSerial = report.inverterSerial,
             generationMeterSerial = report.generationMeterSerial,
@@ -1116,9 +1841,8 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
   fun updateInstallationSignOff(
     installerName: String? = null,
     installerSignatureStrokes: List<List<Pair<Float, Float>>>? = null,
-    accountantName: String? = null,
-    managerName: String? = null,
     supervisorName: String? = null,
+    managerName: String? = null,
     customerSignatureStrokes: List<List<Pair<Float, Float>>>? = null,
   ) {
     _uiState.update { state ->
@@ -1128,9 +1852,8 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
           f.copy(
             installerName = installerName ?: f.installerName,
             installerSignatureStrokes = installerSignatureStrokes ?: f.installerSignatureStrokes,
-            accountantName = accountantName ?: f.accountantName,
-            managerName = managerName ?: f.managerName,
             supervisorName = supervisorName ?: f.supervisorName,
+            managerName = managerName ?: f.managerName,
             customerSignatureStrokes = customerSignatureStrokes ?: f.customerSignatureStrokes,
             validationError = null,
           )
@@ -1355,7 +2078,8 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
     }
   }
 
-  fun saveInstallationReport(): InstallationReport? {
+  fun saveInstallationReport(onSaved: (InstallationReport) -> Unit = {}): InstallationReport? {
+    if (_uiState.value.isSavingInstallation) return null
     val form = _uiState.value.installationForm
     val part1Error = validateInstallationPart1(form)
     if (part1Error != null) {
@@ -1372,10 +2096,15 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
       return null
     }
 
+    val existingReport =
+      form.editingReportId?.let { id -> _uiState.value.installationReports.firstOrNull { it.id == id } }
     val report =
       InstallationReport(
-        id = form.editingReportId ?: "inst_${System.currentTimeMillis()}",
+        id = form.editingReportId ?: "inst_${System.currentTimeMillis()}_${(100..999).random()}",
         linkedSurveyId = form.linkedSurveyId,
+        installerExecutiveId =
+          existingReport?.installerExecutiveId
+            ?: _uiState.value.installationExecutive.id.takeIf { it.isNotBlank() },
         villageName = form.villageName.trim(),
         consumerNo = form.consumerNo.trim(),
         installationDate = form.installationDate.trim(),
@@ -1386,9 +2115,8 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
         products = form.products,
         installerName = form.installerName.trim(),
         installerSignatureStrokes = form.installerSignatureStrokes,
-        accountantName = form.accountantName.trim(),
-        managerName = form.managerName.trim(),
         supervisorName = form.supervisorName.trim(),
+        managerName = form.managerName.trim(),
         customerSignatureStrokes = form.customerSignatureStrokes,
         inverterSerial = form.inverterSerial,
         generationMeterSerial = form.generationMeterSerial,
@@ -1397,17 +2125,124 @@ class SurveyAppViewModel(application: Application) : AndroidViewModel(applicatio
         updatedAtMillis = System.currentTimeMillis(),
       )
 
-    surveyRepository.saveInstallationReport(report)
-    _uiState.update {
-      it.copy(
-        currentScreen = AppScreen.INSTALLATION_DASHBOARD,
-        activeInstallationTab = InstallationTab.HOME,
-        installationReports = surveyRepository.installationReports.value,
-        installationForm = InstallationFormState(),
-        snackbarMessage = "Installation Certificate saved for ${report.consumerName}.",
-      )
+    if (!isCloudMode) {
+      surveyRepository.saveInstallationReport(report)
+      _uiState.update {
+        it.copy(
+          currentScreen = AppScreen.INSTALLATION_DASHBOARD,
+          activeInstallationTab = InstallationTab.HOME,
+          installationReports = surveyRepository.installationReports.value,
+          installationForm = InstallationFormState(),
+          snackbarMessage = "Installation Certificate saved for ${report.consumerName}.",
+        )
+      }
+      recomputeDerivedCollections()
+      onSaved(report)
+      return report
     }
-    return report
+
+    _uiState.update {
+      it.copy(isSavingInstallation = true, installationForm = form.copy(validationError = null))
+    }
+    viewModelScope.launch {
+      runCatching {
+        val savedCloud =
+          cloudRepository.saveInstallationReportWithUploads(report, previousReport = existingReport)
+        offlineStorage.removePendingReport(savedCloud.id)
+        val freshSnapshot = runCatching { cloudRepository.syncAll() }.getOrNull()
+        savedCloud to freshSnapshot
+      }
+        .onSuccess { (cloudSaved, freshSnapshot) ->
+          val remainingPending = offlineStorage.loadPendingQueue().totalCount
+          var updatedPendingForCache: List<CustomerSurvey> = emptyList()
+          var updatedReportsForCache: List<InstallationReport> = emptyList()
+          _uiState.update { cur ->
+            val updatedReports =
+              freshSnapshot?.installationReports
+                ?: cur.installationReports.toMutableList().apply {
+                  val idx = indexOfFirst { it.id == cloudSaved.id }
+                  if (idx >= 0) set(idx, cloudSaved) else add(0, cloudSaved)
+                }
+            val updatedPendingSurveys =
+              freshSnapshot?.surveys
+                ?: cur.allSurveys.filterNot { it.id == cloudSaved.linkedSurveyId }
+            updatedPendingForCache = updatedPendingSurveys
+            updatedReportsForCache = updatedReports
+            cur.copy(
+              isSavingInstallation = false,
+              currentScreen = AppScreen.INSTALLATION_DASHBOARD,
+              activeInstallationTab = InstallationTab.HOME,
+              installationFilter = InstallationQueueFilter.COMPLETED,
+              allSurveys = updatedPendingSurveys,
+              installationReports = updatedReports,
+              pendingSyncCount = remainingPending,
+              installationForm = InstallationFormState(),
+              syncErrorMessage = null,
+              snackbarMessage = "इन्स्टॉलेशन रिपोर्ट व फोटो Supabase + R2 वर जतन झाले.",
+            )
+          }
+          offlineStorage.saveCache(
+            surveys = updatedPendingForCache,
+            installationReports = updatedReportsForCache,
+            customVillages = emptyList(),
+          )
+          recomputeDerivedCollections()
+          onSaved(cloudSaved)
+        }
+        .onFailure { err ->
+          if (err is AccessRevokedException) {
+            handleAccessRevoked(err.message ?: SupabaseSurveyRepository.ACCESS_REVOKED_MESSAGE_MR)
+          } else if (isLikelyOfflineError(err)) {
+            val queue = offlineStorage.enqueuePendingReport(report)
+            val durableReport = queue.pendingReports.firstOrNull { it.id == report.id } ?: report
+            var updatedPendingForCache: List<CustomerSurvey> = emptyList()
+            var updatedReportsForCache: List<InstallationReport> = emptyList()
+            _uiState.update { cur ->
+              val updatedReports =
+                cur.installationReports.toMutableList().apply {
+                  val idx = indexOfFirst { it.id == durableReport.id }
+                  if (idx >= 0) set(idx, durableReport) else add(0, durableReport)
+                }
+              val updatedPendingSurveys =
+                cur.allSurveys.filterNot { it.id == durableReport.linkedSurveyId }
+              updatedPendingForCache = updatedPendingSurveys
+              updatedReportsForCache = updatedReports
+              cur.copy(
+                isSavingInstallation = false,
+                currentScreen = AppScreen.INSTALLATION_DASHBOARD,
+                activeInstallationTab = InstallationTab.HOME,
+                installationFilter = InstallationQueueFilter.COMPLETED,
+                allSurveys = updatedPendingSurveys,
+                installationReports = updatedReports,
+                pendingSyncCount = queue.totalCount,
+                installationForm = InstallationFormState(),
+                syncErrorMessage =
+                  "इंटरनेट नाही — ${queue.totalCount} रिपोर्ट व फोटो मोबाईलमध्ये सुरक्षित जतन आहेत. नेटवर्क आल्यावर रिफ्रेश (↻) करा.",
+                snackbarMessage =
+                  "इंटरनेट नाही — ${durableReport.consumerName} यांचा इन्स्टॉलेशन रिपोर्ट व फोटो मोबाईलमध्ये जतन झाले.",
+              )
+            }
+            offlineStorage.saveCache(
+              surveys = updatedPendingForCache,
+              installationReports = updatedReportsForCache,
+              customVillages = emptyList(),
+            )
+            recomputeDerivedCollections()
+            onSaved(durableReport)
+          } else {
+            _uiState.update { cur ->
+              cur.copy(
+                isSavingInstallation = false,
+                installationForm =
+                  cur.installationForm.copy(
+                    validationError = "Upload / Save failed: ${err.message ?: "Please try again."}"
+                  ),
+              )
+            }
+          }
+        }
+    }
+    return null
   }
 
   private fun buildReportBRows(surveys: List<CustomerSurvey>): List<ReportBRow> {

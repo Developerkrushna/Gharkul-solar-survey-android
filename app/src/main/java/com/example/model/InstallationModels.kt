@@ -39,6 +39,7 @@ data class InstallationPhotoItem(
   val photoSizeKb: Int? = null,
   val geoInfo: String = "",
   val isCameraGeoStamped: Boolean = false,
+  val r2ObjectKey: String? = null,
 )
 
 enum class InstallationTab {
@@ -59,21 +60,20 @@ data class InstallationReport(
   val products: List<InstallationProductRow> = defaultInstallationProductRows(),
   val installerName: String = "",
   val installerSignatureStrokes: List<List<Pair<Float, Float>>> = emptyList(),
-  val accountantName: String = "",
-  val managerName: String = "",
   val supervisorName: String = "",
+  val managerName: String = "",
   val customerSignatureStrokes: List<List<Pair<Float, Float>>> = emptyList(),
   val inverterSerial: SerialVerificationField = SerialVerificationField(),
   val generationMeterSerial: SerialVerificationField = SerialVerificationField(),
   val panelSerials: List<PanelSerialEntry> = defaultPanelSerialEntries(),
   val afterInstallationPhotos: List<InstallationPhotoItem> = defaultInstallationPhotos(),
   val updatedAtMillis: Long = System.currentTimeMillis(),
+  val installerExecutiveId: String? = null,
 )
 
-enum class InstallationQueueFilter(val labelEn: String) {
-  ALL("All"),
-  PENDING("Pending"),
-  COMPLETED("Completed"),
+enum class InstallationQueueFilter(val labelMr: String) {
+  PENDING("इन्स्टॉलेशन बाकी ग्राहक"),
+  COMPLETED("माझे पूर्ण इन्स्टॉलेशन"),
 }
 
 fun defaultInstallationDate(): String =

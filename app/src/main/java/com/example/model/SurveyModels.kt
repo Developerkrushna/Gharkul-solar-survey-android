@@ -110,7 +110,7 @@ enum class ResponsibleParty(val labelMr: String) {
 }
 
 enum class DocumentLegibility(val labelMr: String) {
-  CLEAR("स्पष्ट"),
+  CLEAR("बरोबर"),
   UNCLEAR("अस्पष्ट"),
   MISSING("उपलब्ध नाही"),
 }
@@ -189,6 +189,7 @@ data class DocumentEntry(
   val legibility: DocumentLegibility = DocumentLegibility.MISSING,
   val matchResult: NameMatchResult = NameMatchResult.NOT_ENTERED,
   val queryNote: String = "",
+  val r2ObjectKey: String? = null,
 )
 
 data class MeterInfo(
@@ -215,6 +216,8 @@ data class SiteSurveyDetails(
   val noteCamEarthingWithOwnerPhotoUri: String? = null,
   val noteCamEarthingWithOwnerPhotoKb: Int? = null,
   val noteCamEarthingGeoInfo: String = "",
+  val noteCamRoofR2Key: String? = null,
+  val noteCamEarthingR2Key: String? = null,
 )
 
 data class DocumentComplianceChecks(
@@ -291,6 +294,9 @@ data class CustomerSurvey(
   val executiveRemark: String = "",
   val surveyDateLabel: String,
   val isSurveyedToday: Boolean = true,
+  val executiveId: String? = null,
+  val govFormCompleted: Boolean = false,
+  val govFormCompletedAt: String? = null,
 )
 
 data class VillageStats(
@@ -315,4 +321,11 @@ data class ExecutiveUser(
   val email: String,
   val mobile: String,
   val roleMr: String,
+  val id: String = "",
+  val authUserId: String = "",
+  val role: String = "SURVEY_EXECUTIVE",
+  val assignedDistrict: String = "",
+  val assignedTaluka: String = "",
+  val assignedVillage: String = "",
+  val isActive: Boolean = true,
 )

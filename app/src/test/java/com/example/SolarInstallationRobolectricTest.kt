@@ -162,9 +162,8 @@ class SolarInstallationRobolectricTest {
     viewModel.updateInstallationSignOff(
       installerName = "Vikram Kulkarni",
       installerSignatureStrokes = listOf(listOf(10f to 10f, 80f to 40f)),
-      accountantName = "S. Joshi",
-      managerName = "A. Deshmukh",
       supervisorName = "R. Patil",
+      managerName = "A. Deshmukh",
       customerSignatureStrokes = listOf(listOf(15f to 20f, 95f to 45f)),
     )
     viewModel.nextInstallationFormPage()
@@ -235,7 +234,8 @@ class SolarInstallationRobolectricTest {
     assertEquals(AppScreen.INSTALLATION_DASHBOARD, viewModel.uiState.value.currentScreen)
     assertEquals(InstallationTab.HOME, viewModel.uiState.value.activeInstallationTab)
     assertEquals(1, viewModel.uiState.value.installationReports.size)
-    assertEquals("S. Joshi", saved!!.accountantName)
+    assertEquals("R. Patil", saved!!.supervisorName)
+    assertEquals("A. Deshmukh", saved.managerName)
     assertEquals("PNL-1003", saved.panelSerials[2].serial.trimmedPrimary)
     assertEquals(2, saved.afterInstallationPhotos.count { !it.photoUri.isNullOrBlank() })
 

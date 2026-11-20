@@ -3,7 +3,6 @@ package com.example.ui.screens
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,12 +22,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Assignment
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.SolarPower
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -36,7 +36,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,6 +62,8 @@ import com.example.ui.theme.BorderSubtle
 import com.example.ui.theme.BrandCrimson
 import com.example.ui.theme.BrandNavy
 import com.example.ui.theme.CardWhite
+import com.example.ui.theme.PendingRoseBg
+import com.example.ui.theme.PendingRoseText
 import com.example.ui.theme.SurfaceCanvas
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
@@ -73,13 +74,14 @@ fun LoginScreen(
   email: String,
   password: String,
   errorMessage: String?,
+  isAuthenticating: Boolean = false,
+  isCloudConfigured: Boolean = false,
   onSelectRole: (LoginRole) -> Unit = {},
   onEmailChange: (String) -> Unit,
   onPasswordChange: (String) -> Unit,
   onLoginClick: () -> Unit,
 ) {
   var passwordVisible by remember { mutableStateOf(false) }
-  var showForgotDialog by remember { mutableStateOf(false) }
   val isInstallation = selectedRole == LoginRole.SOLAR_INSTALLATION
 
   Box(
@@ -231,34 +233,41 @@ fun LoginScreen(
         )
       }
 
-      Spacer(modifier = Modifier.height(10.dp))
-
-      Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-        Text(
-          text = if (isInstallation) "Forgot Password?" else "पासवर्ड विसरलात?",
-          style = MaterialTheme.typography.titleSmall,
-          color = BrandNavy,
-          modifier =
-            Modifier.clickable { showForgotDialog = true }
-              .padding(vertical = 8.dp, horizontal = 4.dp)
-              .testTag("forgot_password_button"),
-        )
-      }
-
       if (!errorMessage.isNullOrBlank()) {
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-          text = errorMessage,
-          color = BrandCrimson,
-          style = MaterialTheme.typography.bodyMedium,
-          modifier = Modifier.fillMaxWidth(),
-        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Surface(
+          modifier = Modifier.fillMaxWidth().testTag("login_error_banner"),
+          shape = RoundedCornerShape(12.dp),
+          color = PendingRoseBg,
+          border = BorderStroke(1.dp, BrandCrimson.copy(alpha = 0.4f)),
+        ) {
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            Icon(
+              imageVector = Icons.Outlined.ErrorOutline,
+              contentDescription = null,
+              tint = PendingRoseText,
+              modifier = Modifier.size(20.dp).padding(top = 1.dp),
+            )
+            Text(
+              text = errorMessage,
+              color = PendingRoseText,
+              style = MaterialTheme.typography.bodyMedium,
+              fontWeight = FontWeight.Medium,
+              modifier = Modifier.weight(1f),
+            )
+          }
+        }
       }
 
       Spacer(modifier = Modifier.height(18.dp))
 
       Button(
         onClick = onLoginClick,
+        enabled = !isAuthenticating,
         modifier = Modifier.fillMaxWidth().height(54.dp).testTag("login_submit_button"),
         shape = RoundedCornerShape(14.dp),
         colors =
@@ -267,11 +276,19 @@ fun LoginScreen(
             contentColor = Color.White,
           ),
       ) {
-        Text(
-          text = if (isInstallation) "Sign In as Solar Installer" else "लॉगिन करा",
-          style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.Bold,
-        )
+        if (isAuthenticating) {
+          CircularProgressIndicator(
+            color = Color.White,
+            strokeWidth = 2.dp,
+            modifier = Modifier.size(20.dp),
+          )
+        } else {
+          Text(
+            text = if (isInstallation) "Sign In as Solar Installer" else "लॉगिन करा",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+          )
+        }
       }
 
       if (isInstallation) {
@@ -291,39 +308,17 @@ fun LoginScreen(
           )
         }
       }
-    }
-  }
 
-  if (showForgotDialog) {
-    AlertDialog(
-      onDismissRequest = { showForgotDialog = false },
-      title = {
-        Text(
-          text = if (isInstallation) "Password Assistance" else "पासवर्ड मदतीसाठी",
-          color = BrandNavy,
-          fontWeight = FontWeight.Bold,
-        )
-      },
-      text = {
-        Text(
-          text =
-            if (isInstallation)
-              "Please contact Reflection Media Corporate Office (91300028122) to reset your Solar Installation Executive credentials. Demo login: installer@reflectionmedias.in / 123456."
-            else
-              "आपला नवीन पासवर्ड किंवा लॉगिन तपशील मिळवण्यासाठी कृपया मुख्य कार्यालय (अ‍ॅडमिन) यांच्याशी संपर्क साधा. डेमो लॉगिनसाठी पूर्वनिर्धारित ईमेल व पासवर्ड वापरू शकता.",
-          style = MaterialTheme.typography.bodyMedium,
-        )
-      },
-      confirmButton = {
-        TextButton(onClick = { showForgotDialog = false }) {
-          Text(
-            text = if (isInstallation) "OK" else "ठीक आहे",
-            color = BrandNavy,
-            fontWeight = FontWeight.Bold,
-          )
-        }
-      },
-    )
+      Spacer(modifier = Modifier.height(10.dp))
+      Text(
+        text =
+          if (isCloudConfigured) "Supabase Auth + PostgreSQL + Cloudflare R2 Connected"
+          else "Offline Demo Mode (Add SUPABASE_URL & SUPABASE_ANON_KEY in Secrets to sync)",
+        style = MaterialTheme.typography.labelSmall,
+        color = TextMuted,
+        textAlign = TextAlign.Center,
+      )
+    }
   }
 }
 

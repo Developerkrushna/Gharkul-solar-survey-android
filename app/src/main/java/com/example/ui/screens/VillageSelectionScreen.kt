@@ -82,6 +82,7 @@ fun VillageSelectionScreen(
   selectedTaluka: Taluka?,
   selectedVillage: Village?,
   villageStats: VillageStats,
+  assignedAreaBanner: String? = null,
   onSelectDistrict: (District) -> Unit,
   onSelectTaluka: (Taluka) -> Unit,
   onSelectVillage: (Village) -> Unit,
@@ -145,6 +146,23 @@ fun VillageSelectionScreen(
             .padding(horizontal = 20.dp, vertical = 20.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
       ) {
+        if (!assignedAreaBanner.isNullOrBlank()) {
+          Surface(
+            modifier = Modifier.fillMaxWidth().testTag("assigned_area_banner"),
+            shape = RoundedCornerShape(12.dp),
+            color = BannerIceBlue,
+            border = BorderStroke(1.dp, BorderSubtle),
+          ) {
+            Text(
+              text = assignedAreaBanner,
+              style = MaterialTheme.typography.bodySmall,
+              color = BrandNavy,
+              fontWeight = FontWeight.SemiBold,
+              modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            )
+          }
+        }
+
         LocationPickerField(
           label = "जिल्हा",
           value = selectedDistrict?.nameMr ?: "जिल्हा निवडा",

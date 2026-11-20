@@ -9,4 +9,7 @@
     <cache-path
         name="cache_root"
         path="." />
+    <files-path
+        name="offline_photos"
+        path="offline_photos/" />
 </paths>

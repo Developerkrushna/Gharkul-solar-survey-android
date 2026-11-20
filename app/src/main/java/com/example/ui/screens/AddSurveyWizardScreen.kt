@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -25,6 +26,9 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,6 +61,7 @@ fun AddSurveyWizardScreen(
   talukaNameMr: String,
   districtNameMr: String,
   snackbarHostState: SnackbarHostState,
+  isSaving: Boolean = false,
   onPreviousStep: () -> Unit,
   onNextStep: () -> Unit,
   onJumpToStep: (Int) -> Unit,
@@ -119,7 +124,7 @@ fun AddSurveyWizardScreen(
       Surface(color = CardWhite, shadowElevation = 8.dp) {
         Column(modifier = Modifier.fillMaxWidth().navigationBarsPadding()) {
           HorizontalDivider(color = BorderSubtle)
-          if (!wizard.validationError.isNullOrBlank() && wizard.currentStep != 3) {
+          if (!wizard.validationError.isNullOrBlank()) {
             Text(
               text = wizard.validationError,
               color = BrandCrimson,
@@ -156,6 +161,7 @@ fun AddSurveyWizardScreen(
               ) {
                 OutlinedButton(
                   onClick = { onJumpToStep(1) },
+                  enabled = !isSaving,
                   modifier = Modifier.weight(1f).height(52.dp).testTag("wizard_edit_button"),
                   shape = RoundedCornerShape(14.dp),
                   border = BorderStroke(1.5.dp, BrandNavy),
@@ -169,15 +175,30 @@ fun AddSurveyWizardScreen(
                 }
                 Button(
                   onClick = onSaveSurvey,
+                  enabled = !isSaving,
                   modifier = Modifier.weight(1.4f).height(52.dp).testTag("wizard_save_button"),
                   shape = RoundedCornerShape(14.dp),
                   colors = ButtonDefaults.buttonColors(containerColor = BrandNavy, contentColor = Color.White),
                 ) {
-                  Text(
-                    text = "जतन करा",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                  )
+                  if (isSaving) {
+                    CircularProgressIndicator(
+                      color = Color.White,
+                      strokeWidth = 2.dp,
+                      modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                      text = "अपलोड सुरू...",
+                      style = MaterialTheme.typography.titleMedium,
+                      fontWeight = FontWeight.Bold,
+                    )
+                  } else {
+                    Text(
+                      text = "जतन करा",
+                      style = MaterialTheme.typography.titleMedium,
+                      fontWeight = FontWeight.Bold,
+                    )
+                  }
                 }
               }
             }

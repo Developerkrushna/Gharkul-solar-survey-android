@@ -149,6 +149,13 @@ fun CustomerDetailSheet(
               fontWeight = FontWeight.SemiBold,
             )
           }
+          if (customer.govFormCompleted) {
+            StatusTagChip(
+              text = "सरकारी फॉर्म पूर्ण · इन्स्टॉलेशनकडे वर्ग",
+              bgColor = SuccessGreenBg,
+              textColor = SuccessGreenText,
+            )
+          }
         }
       }
 

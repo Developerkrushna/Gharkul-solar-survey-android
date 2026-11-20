@@ -85,13 +85,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
-import coil.compose.AsyncImage
 import com.example.R
 import com.example.model.InstallationPhotoItem
 import com.example.model.InstallationProductRow
 import com.example.model.PanelSerialEntry
 import com.example.model.SerialVerificationField
 import com.example.ui.components.BrandTopBar
+import com.example.ui.components.RemoteAwarePhotoPreview
 import com.example.ui.components.SignaturePadCard
 import com.example.ui.components.StatusTagChip
 import com.example.ui.theme.BannerIceBlue
@@ -124,6 +124,7 @@ import kotlinx.coroutines.withContext
 fun InstallationFormScreen(
   form: InstallationFormState,
   snackbarHostState: SnackbarHostState,
+  isSaving: Boolean = false,
   onSetPage: (Int) -> Unit,
   onNextPage: () -> Unit,
   onPreviousPage: () -> Unit,
@@ -146,9 +147,8 @@ fun InstallationFormScreen(
   onUpdateSignOff: (
     installerName: String?,
     installerSignatureStrokes: List<List<Pair<Float, Float>>>?,
-    accountantName: String?,
-    managerName: String?,
     supervisorName: String?,
+    managerName: String?,
     customerSignatureStrokes: List<List<Pair<Float, Float>>>?,
   ) -> Unit,
   onUpdateInverterSerial: (primary: String?, confirm: String?) -> Unit,
@@ -391,6 +391,7 @@ fun InstallationFormScreen(
           ) {
             OutlinedButton(
               onClick = onPreviousPage,
+              enabled = !isSaving,
               modifier = Modifier.weight(1f).height(50.dp).testTag("install_prev_button"),
               shape = RoundedCornerShape(12.dp),
               border = BorderStroke(1.dp, BrandNavy),
@@ -404,6 +405,7 @@ fun InstallationFormScreen(
 
             Button(
               onClick = { if (form.currentPage < 3) onNextPage() else onSubmitCertificate() },
+              enabled = !isSaving,
               modifier =
                 Modifier.weight(1.45f)
                   .height(50.dp)
@@ -417,15 +419,28 @@ fun InstallationFormScreen(
                   contentColor = Color.White,
                 ),
             ) {
-              Text(
-                text =
-                  when (form.currentPage) {
-                    1 -> "Next: Serial Nos."
-                    2 -> "Next: NoteCam Photos"
-                    else -> "Submit Certificate"
-                  },
-                fontWeight = FontWeight.Bold,
-              )
+              if (isSaving && form.currentPage == 3) {
+                CircularProgressIndicator(
+                  color = Color.White,
+                  strokeWidth = 2.dp,
+                  modifier = Modifier.size(18.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                  text = "Uploading & Saving...",
+                  fontWeight = FontWeight.Bold,
+                )
+              } else {
+                Text(
+                  text =
+                    when (form.currentPage) {
+                      1 -> "Next: Serial Nos."
+                      2 -> "Next: NoteCam Photos"
+                      else -> "Submit Certificate"
+                    },
+                  fontWeight = FontWeight.Bold,
+                )
+              }
             }
           }
         }
@@ -656,7 +671,7 @@ fun InstallationFormScreen(
                   EnglishField(
                     label = "Installer Name *",
                     value = form.installerName,
-                    onValueChange = { onUpdateSignOff(it, null, null, null, null, null) },
+                    onValueChange = { onUpdateSignOff(it, null, null, null, null) },
                     placeholder = "Enter installer full name",
                     capitalization = KeyboardCapitalization.Words,
                     testTag = "install_installer_name_input",
@@ -665,7 +680,7 @@ fun InstallationFormScreen(
                   SignaturePadCard(
                     title = "Installer Signature *",
                     strokes = form.installerSignatureStrokes,
-                    onStrokesChange = { onUpdateSignOff(null, it, null, null, null, null) },
+                    onStrokesChange = { onUpdateSignOff(null, it, null, null, null) },
                     testTag = "install_installer_signature",
                     clearLabel = "Clear",
                     placeholderText = "Installer signs here with finger",
@@ -685,40 +700,31 @@ fun InstallationFormScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                   ) {
                     EnglishField(
-                      label = "1) Accountant",
-                      value = form.accountantName,
-                      onValueChange = { onUpdateSignOff(null, null, it, null, null, null) },
-                      placeholder = "Name",
+                      label = "1) Supervisor",
+                      value = form.supervisorName,
+                      onValueChange = { onUpdateSignOff(null, null, it, null, null) },
+                      placeholder = "Supervisor name",
                       capitalization = KeyboardCapitalization.Words,
                       modifier = Modifier.weight(1f),
-                      testTag = "install_accountant_input",
+                      testTag = "install_supervisor_input",
                     )
                     EnglishField(
                       label = "2) Manager",
                       value = form.managerName,
-                      onValueChange = { onUpdateSignOff(null, null, null, it, null, null) },
-                      placeholder = "Name",
+                      onValueChange = { onUpdateSignOff(null, null, null, it, null) },
+                      placeholder = "Manager name",
                       capitalization = KeyboardCapitalization.Words,
                       modifier = Modifier.weight(1f),
                       testTag = "install_manager_input",
                     )
                   }
 
-                  EnglishField(
-                    label = "3) Supervisor",
-                    value = form.supervisorName,
-                    onValueChange = { onUpdateSignOff(null, null, null, null, it, null) },
-                    placeholder = "Supervisor name / remark",
-                    capitalization = KeyboardCapitalization.Words,
-                    testTag = "install_supervisor_input",
-                  )
-
                   HorizontalDivider(thickness = 1.dp, color = DividerLight)
 
                   SignaturePadCard(
                     title = "Customer Sign and Stamp *",
                     strokes = form.customerSignatureStrokes,
-                    onStrokesChange = { onUpdateSignOff(null, null, null, null, null, it) },
+                    onStrokesChange = { onUpdateSignOff(null, null, null, null, it) },
                     testTag = "install_customer_signature",
                     clearLabel = "Clear",
                     placeholderText = "Customer signs here with finger",
@@ -1332,11 +1338,12 @@ private fun AfterInstallationPhotoCard(
               .background(BannerIceBlue)
               .testTag("install_photo_preview_${index + 1}"),
         ) {
-          AsyncImage(
-            model = item.photoUri,
+          RemoteAwarePhotoPreview(
+            photoUri = item.photoUri,
             contentDescription = item.caption,
             modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop,
+            compact = false,
+            isMarathi = false,
           )
 
           IconButton(

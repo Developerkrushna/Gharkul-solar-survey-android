@@ -634,8 +634,26 @@ object SurveyPdfGenerator {
   private fun decodeUriBitmap(context: Context, uriStr: String?, maxDim: Int): Bitmap? {
     if (uriStr.isNullOrBlank() || uriStr.startsWith("captured://")) return null
     return runCatching {
-      val uri = Uri.parse(uriStr)
-      val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
+      val bytes =
+        if (uriStr.startsWith("http://") || uriStr.startsWith("https://")) {
+          val conn = (java.net.URL(uriStr).openConnection() as java.net.HttpURLConnection).apply {
+            connectTimeout = 15000
+            readTimeout = 20000
+          }
+          try {
+            if (conn.responseCode in 200..299) {
+              conn.inputStream.use { it.readBytes() }
+            } else {
+              null
+            }
+          } finally {
+            conn.disconnect()
+          }
+        } else {
+          val uri = Uri.parse(uriStr)
+          context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        } ?: return null
+
       val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
       BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
       if (opts.outWidth <= 0 || opts.outHeight <= 0) return null

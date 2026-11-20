@@ -27,17 +27,20 @@ import androidx.compose.material.icons.outlined.Business
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.SolarPower
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -48,10 +51,13 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,6 +66,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.model.CustomerSurvey
@@ -68,8 +75,10 @@ import com.example.model.InstallationQueueFilter
 import com.example.model.InstallationReport
 import com.example.model.InstallationTab
 import com.example.ui.components.BrandTopBar
+import com.example.ui.components.CircularSyncTopBarButton
 import com.example.ui.components.InstallationBottomBar
 import com.example.ui.components.StatusTagChip
+import com.example.ui.components.SyncErrorRetryBanner
 import com.example.ui.theme.BannerIceBlue
 import com.example.ui.theme.BorderSubtle
 import com.example.ui.theme.BrandCrimson
@@ -84,7 +93,11 @@ import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.WarningAmberBg
 import com.example.ui.theme.WarningAmberText
 import com.example.util.InstallationPdfGenerator
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun InstallationDashboardScreen(
   activeTab: InstallationTab,
@@ -94,6 +107,11 @@ fun InstallationDashboardScreen(
   searchQuery: String,
   selectedFilter: InstallationQueueFilter,
   snackbarHostState: SnackbarHostState,
+  isCloudConfigured: Boolean = false,
+  isSyncing: Boolean = false,
+  pendingSyncCount: Int = 0,
+  syncErrorMessage: String? = null,
+  onSyncClick: () -> Unit = {},
   onSelectTab: (InstallationTab) -> Unit,
   onSearchChange: (String) -> Unit,
   onFilterSelect: (InstallationQueueFilter) -> Unit,
@@ -104,6 +122,7 @@ fun InstallationDashboardScreen(
   onLogoutClick: () -> Unit,
 ) {
   val context = LocalContext.current
+  val scope = rememberCoroutineScope()
   var shareTargetReport by remember { mutableStateOf<InstallationReport?>(null) }
 
   if (activeTab != InstallationTab.HOME) {
@@ -112,60 +131,53 @@ fun InstallationDashboardScreen(
 
   val reportBySurveyId =
     installationReports.filter { it.linkedSurveyId != null }.associateBy { it.linkedSurveyId!! }
-  val completedLinkedCount = approvedCat1Surveys.count { reportBySurveyId.containsKey(it.id) }
-  val pendingCount = (approvedCat1Surveys.size - completedLinkedCount).coerceAtLeast(0)
+  val pendingSurveysAll = approvedCat1Surveys.filterNot { reportBySurveyId.containsKey(it.id) }
+  val pendingCount = pendingSurveysAll.size
   val totalCompletedCount = installationReports.size
 
   val q = searchQuery.trim()
   val filteredPendingSurveys =
-    if (selectedFilter == InstallationQueueFilter.COMPLETED) emptyList()
-    else {
-      approvedCat1Surveys.filter { survey ->
-        val alreadyDone = reportBySurveyId.containsKey(survey.id)
-        val filterMatch =
-          when (selectedFilter) {
-            InstallationQueueFilter.ALL -> !alreadyDone
-            InstallationQueueFilter.PENDING -> !alreadyDone
-            InstallationQueueFilter.COMPLETED -> false
-          }
-        val queryMatch =
-          q.isBlank() ||
-            survey.beneficiaryName.contains(q, ignoreCase = true) ||
-            survey.meterInfo.consumerNumber.contains(q, ignoreCase = true) ||
-            survey.mobile.contains(q, ignoreCase = true) ||
-            survey.villageNameMr.contains(q, ignoreCase = true)
-        filterMatch && queryMatch
-      }
+    pendingSurveysAll.filter { survey ->
+      q.isBlank() ||
+        survey.beneficiaryName.contains(q, ignoreCase = true) ||
+        survey.meterInfo.consumerNumber.contains(q, ignoreCase = true) ||
+        survey.mobile.contains(q, ignoreCase = true) ||
+        survey.villageNameMr.contains(q, ignoreCase = true) ||
+        survey.talukaNameMr.contains(q, ignoreCase = true) ||
+        survey.districtNameMr.contains(q, ignoreCase = true)
     }
 
   val filteredReports =
-    if (selectedFilter == InstallationQueueFilter.PENDING) emptyList()
-    else {
-      installationReports.filter { report ->
-        q.isBlank() ||
-          report.consumerName.contains(q, ignoreCase = true) ||
-          report.consumerNo.contains(q, ignoreCase = true) ||
-          report.mobileNo.contains(q, ignoreCase = true) ||
-          report.villageName.contains(q, ignoreCase = true)
-      }
+    installationReports.filter { report ->
+      q.isBlank() ||
+        report.consumerName.contains(q, ignoreCase = true) ||
+        report.consumerNo.contains(q, ignoreCase = true) ||
+        report.mobileNo.contains(q, ignoreCase = true) ||
+        report.villageName.contains(q, ignoreCase = true)
     }
 
   fun launchPdfShare(report: InstallationReport, includeImages: Boolean) {
-    val pdfUri = InstallationPdfGenerator.generateCertificatePdf(context, report, includeImages)
-    if (pdfUri != null) {
-      val shareIntent =
-        Intent(Intent.ACTION_SEND).apply {
-          type = "application/pdf"
-          putExtra(Intent.EXTRA_STREAM, pdfUri)
-          putExtra(
-            Intent.EXTRA_SUBJECT,
-            "Installation Certificate - ${report.consumerName} (${report.consumerNo})",
-          )
-          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    scope.launch {
+      onShowMessage("इन्स्टॉलेशन सर्टिफिकेट PDF तयार होत आहे...")
+      val pdfUri =
+        withContext(Dispatchers.IO) {
+          InstallationPdfGenerator.generateCertificatePdf(context, report, includeImages)
         }
-      context.startActivity(Intent.createChooser(shareIntent, "Share Installation Certificate PDF"))
-    } else {
-      onShowMessage("Failed to generate Installation Certificate PDF. Please try again.")
+      if (pdfUri != null) {
+        val shareIntent =
+          Intent(Intent.ACTION_SEND).apply {
+            type = "application/pdf"
+            putExtra(Intent.EXTRA_STREAM, pdfUri)
+            putExtra(
+              Intent.EXTRA_SUBJECT,
+              "Installation Certificate - ${report.consumerName} (${report.consumerNo})",
+            )
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+          }
+        context.startActivity(Intent.createChooser(shareIntent, "Share Installation Certificate PDF"))
+      } else {
+        onShowMessage("PDF तयार करताना त्रुटी आली. कृपया पुन्हा प्रयत्न करा.")
+      }
     }
   }
 
@@ -175,9 +187,18 @@ fun InstallationDashboardScreen(
     topBar = {
       BrandTopBar(
         title =
-          if (activeTab == InstallationTab.HOME) "Solar Installation Portal"
-          else "Installer Profile",
+          if (activeTab == InstallationTab.HOME) "सोलर इन्स्टॉलेशन पोर्टल"
+          else "इन्स्टॉलर प्रोफाइल",
         subtitle = "Reflection Media · ${executive.nameMr}",
+        trailingAction = {
+          CircularSyncTopBarButton(
+            isSyncing = isSyncing,
+            pendingSyncCount = pendingSyncCount,
+            onClick = onSyncClick,
+            testTag = "installation_sync_button",
+            contentDescription = "डेटा सिंक व रिफ्रेश करा",
+          )
+        },
       )
     },
     bottomBar = {
@@ -200,47 +221,67 @@ fun InstallationDashboardScreen(
           onLogoutClick = onLogoutClick,
         )
       } else {
-        LazyColumn(
-          modifier = Modifier.widthIn(max = 720.dp).fillMaxSize(),
-          contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 24.dp),
-          verticalArrangement = Arrangement.spacedBy(12.dp),
+        PullToRefreshBox(
+          isRefreshing = isSyncing,
+          onRefresh = { if (isCloudConfigured) onSyncClick() },
+          modifier = Modifier.fillMaxSize(),
+          contentAlignment = Alignment.TopCenter,
         ) {
-          item {
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-              InstallKpiCard(
-                label = "Approved Ready",
-                value = pendingCount.toString(),
-                bgColor = WarningAmberBg,
-                accentColor = WarningAmberText,
-                modifier = Modifier.weight(1f),
-              )
-              InstallKpiCard(
-                label = "Completed",
-                value = totalCompletedCount.toString(),
-                bgColor = SuccessGreenBg,
-                accentColor = SuccessGreenText,
-                modifier = Modifier.weight(1f),
-              )
-              InstallKpiCard(
-                label = "Cat. 1 Total",
-                value = approvedCat1Surveys.size.toString(),
-                bgColor = BannerIceBlue,
-                accentColor = BrandNavy,
-                modifier = Modifier.weight(1f),
-              )
+          LazyColumn(
+            modifier = Modifier.widthIn(max = 720.dp).fillMaxSize(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+          ) {
+            if (!syncErrorMessage.isNullOrBlank()) {
+              item {
+                SyncErrorRetryBanner(
+                  errorMessage = syncErrorMessage,
+                  isSyncing = isSyncing,
+                  onRetry = onSyncClick,
+                )
+              }
             }
-          }
 
-          item {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Two-tab Marathi switcher: 1. इन्स्टॉलेशन बाकी ग्राहक | 2. माझे पूर्ण इन्स्टॉलेशन
+            item {
+              Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                color = CardWhite,
+                border = BorderStroke(1.dp, BorderSubtle),
+              ) {
+                Row(
+                  modifier = Modifier.fillMaxWidth().padding(6.dp),
+                  horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                  InstallationHomeTabButton(
+                    label = InstallationQueueFilter.PENDING.labelMr,
+                    count = pendingCount,
+                    selected = selectedFilter == InstallationQueueFilter.PENDING,
+                    accentBg = WarningAmberBg,
+                    accentText = WarningAmberText,
+                    onClick = { onFilterSelect(InstallationQueueFilter.PENDING) },
+                    modifier = Modifier.weight(1f).testTag("install_tab_pending"),
+                  )
+                  InstallationHomeTabButton(
+                    label = InstallationQueueFilter.COMPLETED.labelMr,
+                    count = totalCompletedCount,
+                    selected = selectedFilter == InstallationQueueFilter.COMPLETED,
+                    accentBg = SuccessGreenBg,
+                    accentText = SuccessGreenText,
+                    onClick = { onFilterSelect(InstallationQueueFilter.COMPLETED) },
+                    modifier = Modifier.weight(1f).testTag("install_tab_completed"),
+                  )
+                }
+              }
+            }
+
+            item {
               OutlinedTextField(
                 value = searchQuery,
                 onValueChange = onSearchChange,
                 modifier = Modifier.fillMaxWidth().testTag("installation_search_input"),
-                placeholder = { Text("Search consumer name, consumer no., or mobile", color = TextMuted) },
+                placeholder = { Text("नाव, गाव, ग्राहक क्र. किंवा मोबाईल शोधा", color = TextMuted) },
                 leadingIcon = {
                   Icon(imageVector = Icons.Outlined.Search, contentDescription = null, tint = TextMuted)
                 },
@@ -254,104 +295,58 @@ fun InstallationDashboardScreen(
                     unfocusedBorderColor = BorderSubtle,
                   ),
               )
+            }
 
-              Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-              ) {
-                InstallationQueueFilter.entries.forEach { filter ->
-                  val selected = selectedFilter == filter
-                  FilterChip(
-                    selected = selected,
-                    onClick = { onFilterSelect(filter) },
-                    label = {
-                      Text(
-                        text = filter.labelEn,
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                      )
-                    },
-                    colors =
-                      FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = BrandNavy,
-                        selectedLabelColor = Color.White,
-                        containerColor = CardWhite,
-                        labelColor = TextSecondary,
-                      ),
-                    modifier = Modifier.height(40.dp).testTag("install_filter_${filter.name.lowercase()}"),
+            if (selectedFilter == InstallationQueueFilter.PENDING) {
+              if (filteredPendingSurveys.isNotEmpty()) {
+                item {
+                  Text(
+                    text = "इन्स्टॉलेशन बाकी ग्राहक (${filteredPendingSurveys.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = BrandNavy,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 2.dp),
+                  )
+                }
+                items(filteredPendingSurveys, key = { it.id }) { survey ->
+                  PendingInstallationSurveyCard(
+                    survey = survey,
+                    onFillFormClick = { onStartFromSurvey(survey) },
+                  )
+                }
+              } else {
+                item {
+                  EmptyInstallationQueueCard(
+                    title = "इन्स्टॉलेशन बाकी ग्राहक नाहीत",
+                    subtitle =
+                      "ऑफिस अ‍ॅडमिनने श्रेणी १ (Category 1) ग्राहकांचा सरकारी फॉर्म पूर्ण केल्यावर ते येथे दिसतील. नवीन यादीसाठी खाली ओढा (Pull to Refresh).",
                   )
                 }
               }
-            }
-          }
-
-          if (filteredReports.isNotEmpty()) {
-            item {
-              Text(
-                text = "Completed Installation Certificates (${filteredReports.size})",
-                style = MaterialTheme.typography.titleMedium,
-                color = BrandNavy,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(top = 4.dp),
-              )
-            }
-
-            items(filteredReports, key = { it.id }) { report ->
-              CompletedInstallationCard(
-                report = report,
-                onEditClick = { onEditReport(report) },
-                onSharePdfClick = { shareTargetReport = report },
-              )
-            }
-          }
-
-          if (filteredPendingSurveys.isNotEmpty()) {
-            item {
-              Text(
-                text = "Approved Category 1 Customers (${filteredPendingSurveys.size})",
-                style = MaterialTheme.typography.titleMedium,
-                color = BrandNavy,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(top = 4.dp),
-              )
-            }
-
-            items(filteredPendingSurveys, key = { it.id }) { survey ->
-              PendingInstallationSurveyCard(
-                survey = survey,
-                onFillFormClick = { onStartFromSurvey(survey) },
-              )
-            }
-          }
-
-          if (filteredPendingSurveys.isEmpty() && filteredReports.isEmpty()) {
-            item {
-              Surface(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-                shape = RoundedCornerShape(16.dp),
-                color = CardWhite,
-                border = BorderStroke(1.dp, BorderSubtle),
-              ) {
-                Column(
-                  modifier = Modifier.fillMaxWidth().padding(24.dp),
-                  horizontalAlignment = Alignment.CenterHorizontally,
-                  verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                  Icon(
-                    imageVector = Icons.Outlined.SolarPower,
-                    contentDescription = null,
-                    tint = BrandNavy,
-                    modifier = Modifier.size(40.dp),
-                  )
+            } else {
+              if (filteredReports.isNotEmpty()) {
+                item {
                   Text(
-                    text = "No matching installations found",
+                    text = "माझे पूर्ण इन्स्टॉलेशन (${filteredReports.size})",
                     style = MaterialTheme.typography.titleMedium,
-                    color = TextPrimary,
+                    color = BrandNavy,
                     fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 2.dp),
                   )
-                  Text(
-                    text = "Tap the red '+' Manual button in the bottom bar to start a new 1 KW ONGRID Certificate.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TextMuted,
+                }
+                items(filteredReports, key = { it.id }) { report ->
+                  CompletedInstallationCard(
+                    report = report,
+                    onEditClick = { onEditReport(report) },
+                    onSharePdfClick = { shareTargetReport = report },
+                  )
+                }
+              } else {
+                item {
+                  EmptyInstallationQueueCard(
+                    title = "अद्याप पूर्ण इन्स्टॉलेशन नोंद नाही",
+                    subtitle =
+                      "'इन्स्टॉलेशन बाकी ग्राहक' टॅबमधून ग्राहक निवडा किंवा खालील '+' बटणाने नवीन इन्स्टॉलेशन सर्टिफिकेट भरा.",
                   )
                 }
               }
@@ -376,6 +371,101 @@ fun InstallationDashboardScreen(
         launchPdfShare(targetToShare, includeImages = false)
       },
     )
+  }
+}
+
+@Composable
+private fun InstallationHomeTabButton(
+  label: String,
+  count: Int,
+  selected: Boolean,
+  accentBg: Color,
+  accentText: Color,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Surface(
+    modifier = modifier.height(56.dp),
+    shape = RoundedCornerShape(10.dp),
+    color = if (selected) BrandNavy else BannerIceBlue.copy(alpha = 0.45f),
+    border = BorderStroke(1.dp, if (selected) BrandNavy else Color.Transparent),
+    onClick = onClick,
+  ) {
+    Column(
+      modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 6.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.Center,
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        Text(
+          text = label,
+          style = MaterialTheme.typography.labelMedium,
+          color = if (selected) Color.White else BrandNavy,
+          fontWeight = FontWeight.Bold,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.weight(1f, fill = false),
+        )
+        Box(
+          modifier =
+            Modifier
+              .background(
+                color = if (selected) Color.White.copy(alpha = 0.2f) else accentBg,
+                shape = RoundedCornerShape(8.dp),
+              )
+              .padding(horizontal = 7.dp, vertical = 2.dp),
+        ) {
+          Text(
+            text = count.toString(),
+            style = MaterialTheme.typography.labelSmall,
+            color = if (selected) Color.White else accentText,
+            fontWeight = FontWeight.Bold,
+          )
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun EmptyInstallationQueueCard(
+  title: String,
+  subtitle: String,
+) {
+  Surface(
+    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+    shape = RoundedCornerShape(16.dp),
+    color = CardWhite,
+    border = BorderStroke(1.dp, BorderSubtle),
+  ) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(24.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Icon(
+        imageVector = Icons.Outlined.SolarPower,
+        contentDescription = null,
+        tint = BrandNavy,
+        modifier = Modifier.size(40.dp),
+      )
+      Text(
+        text = title,
+        style = MaterialTheme.typography.titleMedium,
+        color = TextPrimary,
+        fontWeight = FontWeight.Bold,
+        textAlign = TextAlign.Center,
+      )
+      Text(
+        text = subtitle,
+        style = MaterialTheme.typography.bodyMedium,
+        color = TextMuted,
+        textAlign = TextAlign.Center,
+      )
+    }
   }
 }
 
@@ -489,7 +579,7 @@ private fun InstallationProfileContent(
           ) {
             Icon(
               imageVector = Icons.Outlined.Person,
-              contentDescription = "Installer Profile",
+              contentDescription = "इन्स्टॉलर प्रोफाइल",
               tint = BrandNavy,
               modifier = Modifier.size(30.dp),
             )
@@ -523,14 +613,14 @@ private fun InstallationProfileContent(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
       ) {
         InstallKpiCard(
-          label = "Pending Cat. 1",
+          label = "इन्स्टॉलेशन बाकी",
           value = pendingCount.toString(),
           bgColor = WarningAmberBg,
           accentColor = WarningAmberText,
           modifier = Modifier.weight(1f),
         )
         InstallKpiCard(
-          label = "Certificates Done",
+          label = "माझे पूर्ण रिपोर्ट",
           value = completedCount.toString(),
           bgColor = SuccessGreenBg,
           accentColor = SuccessGreenText,
@@ -590,7 +680,7 @@ private fun InstallationProfileContent(
         Icon(Icons.AutoMirrored.Outlined.Logout, contentDescription = null, modifier = Modifier.size(20.dp))
         Spacer(modifier = Modifier.width(8.dp))
         Text(
-          text = "Logout",
+          text = "लॉगआउट करा",
           style = MaterialTheme.typography.titleMedium,
           fontWeight = FontWeight.Bold,
         )
@@ -647,6 +737,11 @@ private fun PendingInstallationSurveyCard(
   survey: CustomerSurvey,
   onFillFormClick: () -> Unit,
 ) {
+  val locationLine =
+    listOf(survey.villageNameMr, survey.talukaNameMr, survey.districtNameMr)
+      .filter { it.isNotBlank() }
+      .joinToString(" · ")
+
   Surface(
     modifier = Modifier.fillMaxWidth().testTag("pending_install_card_${survey.id}"),
     shape = RoundedCornerShape(16.dp),
@@ -669,16 +764,31 @@ private fun PendingInstallationSurveyCard(
             color = TextPrimary,
             fontWeight = FontWeight.Bold,
           )
-          Text(
-            text = "Consumer No: ${survey.meterInfo.consumerNumber.ifBlank { "Not entered" }}",
-            style = MaterialTheme.typography.bodySmall,
-            color = TextSecondary,
-          )
+          if (locationLine.isNotBlank()) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+              Icon(
+                imageVector = Icons.Outlined.LocationOn,
+                contentDescription = null,
+                tint = TextMuted,
+                modifier = Modifier.size(14.dp),
+              )
+              Text(
+                text = locationLine,
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+          }
         }
         StatusTagChip(
-          text = "Category 1 · Approved",
-          bgColor = WarningAmberBg,
-          textColor = WarningAmberText,
+          text = if (survey.govFormCompleted) "फॉर्म पूर्ण" else "श्रेणी १ · तयार",
+          bgColor = if (survey.govFormCompleted) SuccessGreenBg else WarningAmberBg,
+          textColor = if (survey.govFormCompleted) SuccessGreenText else WarningAmberText,
         )
       }
 
@@ -687,12 +797,12 @@ private fun PendingInstallationSurveyCard(
         horizontalArrangement = Arrangement.SpaceBetween,
       ) {
         Text(
-          text = "Mobile: ${survey.mobile}",
+          text = "मोबाईल: ${survey.mobile}",
           style = MaterialTheme.typography.bodySmall,
           color = TextMuted,
         )
         Text(
-          text = "System: 1 KW ONGRID",
+          text = "ग्राहक क्र.: ${survey.meterInfo.consumerNumber.ifBlank { "-" }}",
           style = MaterialTheme.typography.bodySmall,
           color = BrandNavy,
           fontWeight = FontWeight.SemiBold,
@@ -707,7 +817,7 @@ private fun PendingInstallationSurveyCard(
       ) {
         Icon(imageVector = Icons.Outlined.SolarPower, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(modifier = Modifier.width(8.dp))
-        Text("Fill Installation Certificate", fontWeight = FontWeight.Bold)
+        Text("इन्स्टॉलेशन फॉर्म भरा", fontWeight = FontWeight.Bold)
       }
     }
   }
@@ -744,13 +854,18 @@ private fun CompletedInstallationCard(
             fontWeight = FontWeight.Bold,
           )
           Text(
-            text = "Consumer No: ${report.consumerNo}  ·  Date: ${report.installationDate}",
+            text =
+              listOfNotNull(
+                report.villageName.takeIf { it.isNotBlank() },
+                "Consumer No: ${report.consumerNo}",
+                report.installationDate.takeIf { it.isNotBlank() },
+              ).joinToString(" · "),
             style = MaterialTheme.typography.bodySmall,
             color = TextSecondary,
           )
         }
         StatusTagChip(
-          text = "Completed",
+          text = "पूर्ण",
           bgColor = SuccessGreenBg,
           textColor = SuccessGreenText,
         )
@@ -787,18 +902,18 @@ private fun CompletedInstallationCard(
         ) {
           Icon(imageVector = Icons.Outlined.Edit, contentDescription = null, tint = BrandNavy, modifier = Modifier.size(16.dp))
           Spacer(modifier = Modifier.width(6.dp))
-          Text("Edit", color = BrandNavy, fontWeight = FontWeight.Bold)
+          Text("संपादित करा", color = BrandNavy, fontWeight = FontWeight.Bold)
         }
 
         Button(
           onClick = onSharePdfClick,
-          modifier = Modifier.weight(1.4f).height(48.dp).testTag("share_install_pdf_${report.id}"),
+          modifier = Modifier.weight(1.3f).height(48.dp).testTag("share_install_pdf_${report.id}"),
           shape = RoundedCornerShape(12.dp),
           colors = ButtonDefaults.buttonColors(containerColor = BrandCrimson, contentColor = Color.White),
         ) {
           Icon(imageVector = Icons.Outlined.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp))
           Spacer(modifier = Modifier.width(6.dp))
-          Text("Share PDF", fontWeight = FontWeight.Bold)
+          Text("PDF शेअर करा", fontWeight = FontWeight.Bold)
         }
       }
     }

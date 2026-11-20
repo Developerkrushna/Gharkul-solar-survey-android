@@ -7,7 +7,9 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,22 +22,24 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material.icons.outlined.SwapHoriz
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material.icons.outlined.Sync
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,12 +48,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.model.AppScreen
 import com.example.model.InstallationReport
 import com.example.model.MainTab
 import com.example.ui.components.BrandTopBar
+import com.example.ui.components.CircularSyncTopBarButton
 import com.example.ui.components.DeleteCustomerConfirmationDialog
 import com.example.ui.components.GharkulBottomBar
 import com.example.ui.screens.AddSurveyWizardScreen
@@ -63,15 +71,14 @@ import com.example.ui.screens.ProfileScreen
 import com.example.ui.screens.VillageSelectionScreen
 import com.example.ui.theme.BannerIceBlue
 import com.example.ui.theme.BorderSubtle
-import com.example.ui.theme.BrandCrimson
 import com.example.ui.theme.BrandNavy
-import com.example.ui.theme.CardWhite
 import com.example.ui.theme.GharkulSurveyTheme
-import com.example.ui.theme.SuccessGreenText
 import com.example.ui.theme.SurfaceCanvas
-import com.example.ui.theme.TextSecondary
 import com.example.util.InstallationPdfGenerator
 import com.example.viewmodel.SurveyAppViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -90,7 +97,21 @@ fun GharkulSurveyApp(viewModel: SurveyAppViewModel = viewModel()) {
   val uiState by viewModel.uiState.collectAsStateWithLifecycle()
   val snackbarHostState = remember { SnackbarHostState() }
   val context = LocalContext.current
+  val lifecycleOwner = LocalLifecycleOwner.current
+  val scope = rememberCoroutineScope()
   var justSavedReport by remember { mutableStateOf<InstallationReport?>(null) }
+
+  DisposableEffect(lifecycleOwner, viewModel) {
+    val observer = LifecycleEventObserver { _, event ->
+      if (event == Lifecycle.Event.ON_RESUME) {
+        viewModel.onAppForegroundResume()
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+    }
+  }
 
   LaunchedEffect(uiState.snackbarMessage) {
     val msg = uiState.snackbarMessage
@@ -107,13 +128,86 @@ fun GharkulSurveyApp(viewModel: SurveyAppViewModel = viewModel()) {
       uiState.selectedDistrict?.nameMr,
     ).joinToString(" · ")
 
-  if (uiState.wizard.isOpen) {
+  fun shareInstallationPdfAsync(target: InstallationReport, includeImages: Boolean) {
+    scope.launch {
+      viewModel.showMessage("Preparing Installation Certificate PDF...")
+      val uri =
+        withContext(Dispatchers.IO) {
+          InstallationPdfGenerator.generateCertificatePdf(context, target, includeImages)
+        }
+      if (uri != null) {
+        val shareIntent =
+          Intent(Intent.ACTION_SEND).apply {
+            type = "application/pdf"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(
+              Intent.EXTRA_SUBJECT,
+              "Installation Certificate - ${target.consumerName} (${target.consumerNo})",
+            )
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+          }
+        context.startActivity(
+          Intent.createChooser(shareIntent, "Share Installation Certificate PDF")
+        )
+      } else {
+        viewModel.showMessage("Could not generate PDF. Please try again.")
+      }
+    }
+  }
+
+  if (uiState.isRestoringSession) {
+    Surface(
+      modifier = Modifier.fillMaxSize().testTag("session_restore_splash"),
+      color = SurfaceCanvas,
+    ) {
+      Column(
+        modifier = Modifier.fillMaxSize().padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+      ) {
+        Surface(
+          shape = RoundedCornerShape(20.dp),
+          color = BrandNavy,
+          modifier = Modifier.size(72.dp),
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Text(
+              text = "घरकुल",
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Bold,
+              color = Color.White,
+            )
+          }
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+          text = "घरकुल सोलर सर्व्हे",
+          style = MaterialTheme.typography.titleLarge,
+          fontWeight = FontWeight.Bold,
+          color = BrandNavy,
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        CircularProgressIndicator(
+          color = BrandNavy,
+          strokeWidth = 3.dp,
+          modifier = Modifier.size(32.dp),
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+          text = "सत्र सुरू करत आहे...",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+    }
+  } else if (uiState.wizard.isOpen) {
     AddSurveyWizardScreen(
       wizard = uiState.wizard,
       villageNameMr = uiState.selectedVillage?.nameMr.orEmpty(),
       talukaNameMr = uiState.selectedTaluka?.nameMr.orEmpty(),
       districtNameMr = uiState.selectedDistrict?.nameMr.orEmpty(),
       snackbarHostState = snackbarHostState,
+      isSaving = uiState.isSavingSurvey,
       onPreviousStep = viewModel::previousWizardStep,
       onNextStep = viewModel::nextWizardStep,
       onJumpToStep = viewModel::setWizardStep,
@@ -139,6 +233,8 @@ fun GharkulSurveyApp(viewModel: SurveyAppViewModel = viewModel()) {
           email = uiState.loginEmail,
           password = uiState.loginPassword,
           errorMessage = uiState.loginError,
+          isAuthenticating = uiState.isAuthenticating,
+          isCloudConfigured = uiState.isCloudConfigured,
           onSelectRole = viewModel::selectLoginRole,
           onEmailChange = viewModel::updateLoginEmail,
           onPasswordChange = viewModel::updateLoginPassword,
@@ -147,6 +243,23 @@ fun GharkulSurveyApp(viewModel: SurveyAppViewModel = viewModel()) {
       }
 
       AppScreen.VILLAGE_SELECT -> {
+        val exec = uiState.executive
+        val assignedAreaBanner =
+          if (
+            exec.assignedDistrict.isNotBlank() ||
+              exec.assignedTaluka.isNotBlank() ||
+              exec.assignedVillage.isNotBlank()
+          ) {
+            val parts =
+              listOf(exec.assignedDistrict, exec.assignedTaluka, exec.assignedVillage)
+                .filter { it.isNotBlank() }
+                .joinToString(" · ")
+            if (exec.assignedVillage.isBlank() || exec.assignedVillage.trim() == "सर्व गाव") {
+              "नेमलेला परिसर: $parts (तुम्ही कोणतेही गाव निवडू शकता)"
+            } else {
+              "नेमलेला परिसर: $parts"
+            }
+          } else null
         VillageSelectionScreen(
           executiveFirstName = uiState.executive.firstNameMr,
           districts = uiState.districts,
@@ -154,6 +267,7 @@ fun GharkulSurveyApp(viewModel: SurveyAppViewModel = viewModel()) {
           selectedTaluka = uiState.selectedTaluka,
           selectedVillage = uiState.selectedVillage,
           villageStats = uiState.villageStats,
+          assignedAreaBanner = assignedAreaBanner,
           onSelectDistrict = viewModel::selectDistrict,
           onSelectTaluka = viewModel::selectTaluka,
           onSelectVillage = viewModel::selectVillage,
@@ -182,30 +296,39 @@ fun GharkulSurveyApp(viewModel: SurveyAppViewModel = viewModel()) {
               title = topTitle,
               subtitle = villageBreadcrumb,
               trailingAction = {
-                Surface(
-                  modifier = Modifier.testTag("header_change_village_chip"),
-                  shape = RoundedCornerShape(10.dp),
-                  color = BannerIceBlue,
-                  border = BorderStroke(1.dp, BorderSubtle),
-                  onClick = viewModel::openVillageSelectorFromDashboard,
-                ) {
-                  Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                  CircularSyncTopBarButton(
+                    isSyncing = uiState.isSyncing,
+                    pendingSyncCount = uiState.pendingSyncCount,
+                    onClick = viewModel::refreshCloudData,
+                    testTag = "survey_sync_button",
+                    contentDescription = "डेटा सिंक व रिफ्रेश करा",
+                  )
+                  Surface(
+                    modifier = Modifier.testTag("header_change_village_chip"),
+                    shape = RoundedCornerShape(10.dp),
+                    color = BannerIceBlue,
+                    border = BorderStroke(1.dp, BorderSubtle),
+                    onClick = viewModel::openVillageSelectorFromDashboard,
                   ) {
-                    Icon(
-                      imageVector = Icons.Outlined.SwapHoriz,
-                      contentDescription = "गाव बदला",
-                      tint = BrandNavy,
-                      modifier = Modifier.size(16.dp),
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                      text = "गाव",
-                      style = MaterialTheme.typography.labelMedium,
-                      color = BrandNavy,
-                      fontWeight = FontWeight.Bold,
-                    )
+                    Row(
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                      verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                      Icon(
+                        imageVector = Icons.Outlined.SwapHoriz,
+                        contentDescription = "गाव बदला",
+                        tint = BrandNavy,
+                        modifier = Modifier.size(16.dp),
+                      )
+                      Spacer(modifier = Modifier.width(4.dp))
+                      Text(
+                        text = "गाव",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = BrandNavy,
+                        fontWeight = FontWeight.Bold,
+                      )
+                    }
                   }
                 }
               },
@@ -226,6 +349,10 @@ fun GharkulSurveyApp(viewModel: SurveyAppViewModel = viewModel()) {
                   stats = uiState.villageStats,
                   searchQuery = uiState.homeSearchQuery,
                   recentSurveys = uiState.activeVillageSurveys,
+                  isCloudConfigured = uiState.isCloudConfigured,
+                  isSyncing = uiState.isSyncing,
+                  syncErrorMessage = uiState.syncErrorMessage,
+                  onRefresh = viewModel::refreshCloudData,
                   onSearchChange = viewModel::updateHomeSearch,
                   onCustomerClick = viewModel::openCustomerDetail,
                 )
@@ -236,6 +363,10 @@ fun GharkulSurveyApp(viewModel: SurveyAppViewModel = viewModel()) {
                   selectedCategory = uiState.selectedCategoryFilter,
                   selectedStatus = uiState.selectedStatusFilter,
                   surveys = uiState.filteredListSurveys,
+                  isCloudConfigured = uiState.isCloudConfigured,
+                  isSyncing = uiState.isSyncing,
+                  syncErrorMessage = uiState.syncErrorMessage,
+                  onRefresh = viewModel::refreshCloudData,
                   onSearchChange = viewModel::updateListSearch,
                   onCategorySelect = viewModel::selectCategoryFilter,
                   onStatusSelect = viewModel::selectStatusFilter,
@@ -283,6 +414,11 @@ fun GharkulSurveyApp(viewModel: SurveyAppViewModel = viewModel()) {
           searchQuery = uiState.installationSearchQuery,
           selectedFilter = uiState.installationFilter,
           snackbarHostState = snackbarHostState,
+          isCloudConfigured = uiState.isCloudConfigured,
+          isSyncing = uiState.isSyncing,
+          pendingSyncCount = uiState.pendingSyncCount,
+          syncErrorMessage = uiState.syncErrorMessage,
+          onSyncClick = viewModel::refreshCloudData,
           onSelectTab = viewModel::selectInstallationTab,
           onSearchChange = viewModel::updateInstallationSearch,
           onFilterSelect = viewModel::selectInstallationFilter,
@@ -302,46 +438,12 @@ fun GharkulSurveyApp(viewModel: SurveyAppViewModel = viewModel()) {
             onShareWithImages = {
               val target = savedDialogReport
               justSavedReport = null
-              val uri = InstallationPdfGenerator.generateCertificatePdf(context, target, includeImages = true)
-              if (uri != null) {
-                val shareIntent =
-                  Intent(Intent.ACTION_SEND).apply {
-                    type = "application/pdf"
-                    putExtra(Intent.EXTRA_STREAM, uri)
-                    putExtra(
-                      Intent.EXTRA_SUBJECT,
-                      "Installation Certificate - ${target.consumerName} (${target.consumerNo})",
-                    )
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                  }
-                context.startActivity(
-                  Intent.createChooser(shareIntent, "Share Installation Certificate PDF")
-                )
-              } else {
-                viewModel.showMessage("Could not generate PDF. Please try again.")
-              }
+              shareInstallationPdfAsync(target, includeImages = true)
             },
             onShareWithoutImages = {
               val target = savedDialogReport
               justSavedReport = null
-              val uri = InstallationPdfGenerator.generateCertificatePdf(context, target, includeImages = false)
-              if (uri != null) {
-                val shareIntent =
-                  Intent(Intent.ACTION_SEND).apply {
-                    type = "application/pdf"
-                    putExtra(Intent.EXTRA_STREAM, uri)
-                    putExtra(
-                      Intent.EXTRA_SUBJECT,
-                      "Installation Certificate - ${target.consumerName} (${target.consumerNo})",
-                    )
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                  }
-                context.startActivity(
-                  Intent.createChooser(shareIntent, "Share Installation Certificate PDF")
-                )
-              } else {
-                viewModel.showMessage("Could not generate PDF. Please try again.")
-              }
+              shareInstallationPdfAsync(target, includeImages = false)
             },
           )
         }
@@ -351,6 +453,7 @@ fun GharkulSurveyApp(viewModel: SurveyAppViewModel = viewModel()) {
         InstallationFormScreen(
           form = uiState.installationForm,
           snackbarHostState = snackbarHostState,
+          isSaving = uiState.isSavingInstallation,
           onSetPage = viewModel::setInstallationFormPage,
           onNextPage = viewModel::nextInstallationFormPage,
           onPreviousPage = viewModel::previousInstallationFormPage,
@@ -368,10 +471,7 @@ fun GharkulSurveyApp(viewModel: SurveyAppViewModel = viewModel()) {
           onUpdatePhotoCapture = viewModel::updateInstallationPhotoCapture,
           onShowMessage = viewModel::showMessage,
           onSubmitCertificate = {
-            val saved = viewModel.saveInstallationReport()
-            if (saved != null) {
-              justSavedReport = saved
-            }
+            viewModel.saveInstallationReport(onSaved = { justSavedReport = it })
           },
         )
       }

@@ -75,7 +75,6 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
-import coil.compose.AsyncImage
 import com.example.domain.SurveyRuleEngine
 import com.example.model.DocumentComplianceChecks
 import com.example.model.DocumentEntry
@@ -83,6 +82,7 @@ import com.example.model.DocumentLegibility
 import com.example.model.DocumentType
 import com.example.model.NameMatchResult
 import com.example.model.SiteSurveyDetails
+import com.example.ui.components.RemoteAwarePhotoPreview
 import com.example.ui.components.StatusTagChip
 import com.example.ui.theme.BannerIceBlue
 import com.example.ui.theme.BorderSubtle
@@ -870,11 +870,12 @@ private fun DocumentCaptureCard(
           verticalAlignment = Alignment.CenterVertically,
         ) {
           if (!entry.photoUri.startsWith("captured://")) {
-            AsyncImage(
-              model = entry.photoUri,
+            RemoteAwarePhotoPreview(
+              photoUri = entry.photoUri,
               contentDescription = "${docType.labelMr} थंबनेल",
-              modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)),
-              contentScale = ContentScale.Crop,
+              modifier = Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)),
+              compact = true,
+              isMarathi = true,
             )
             Spacer(modifier = Modifier.width(10.dp))
           }
@@ -905,11 +906,46 @@ private fun DocumentCaptureCard(
 
       HorizontalDivider(color = DividerLight)
 
-      // Note button + उपलब्ध नाही button (स्पष्ट/अस्पष्ट removed)
+      // Legibility controls per ANDROID_SYNC_STRUCTURE.md Section 3: बरोबर (CLEAR) & उपलब्ध नाही (MISSING) + Note
       Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
+        val isClear = entry.legibility == DocumentLegibility.CLEAR
+        FilterChip(
+          selected = isClear,
+          onClick = { onToggleMissing(false) },
+          label = {
+            Text(
+              text = DocumentLegibility.CLEAR.labelMr,
+              style = MaterialTheme.typography.labelMedium,
+            )
+          },
+          modifier = Modifier.weight(1f).height(48.dp).testTag("doc_clear_btn_${docType.name}"),
+          colors =
+            FilterChipDefaults.filterChipColors(
+              selectedContainerColor = SuccessGreenText,
+              selectedLabelColor = Color.White,
+            ),
+        )
+
+        FilterChip(
+          selected = isMissing,
+          onClick = { onToggleMissing(true) },
+          label = {
+            Text(
+              text = DocumentLegibility.MISSING.labelMr,
+              style = MaterialTheme.typography.labelMedium,
+            )
+          },
+          modifier = Modifier.weight(1.25f).height(48.dp).testTag("doc_missing_btn_${docType.name}"),
+          colors =
+            FilterChipDefaults.filterChipColors(
+              selectedContainerColor = BrandCrimson,
+              selectedLabelColor = Color.White,
+            ),
+        )
+
         FilterChip(
           selected = isNoteExpanded || entry.queryNote.isNotBlank(),
           onClick = { isNoteExpanded = !isNoteExpanded },
@@ -917,38 +953,21 @@ private fun DocumentCaptureCard(
             Icon(
               imageVector = Icons.AutoMirrored.Outlined.NoteAdd,
               contentDescription = null,
-              modifier = Modifier.size(18.dp),
+              modifier = Modifier.size(16.dp),
             )
           },
           label = {
             Text(
-              text = if (entry.queryNote.isNotBlank()) "टीप (नोंदलेली)" else "टीप (Note)",
+              text = if (entry.queryNote.isNotBlank()) "टीप ✓" else "टीप",
               style = MaterialTheme.typography.labelMedium,
             )
           },
-          modifier = Modifier.weight(1f).height(48.dp).testTag("doc_note_btn_${docType.name}"),
+          modifier = Modifier.weight(0.95f).height(48.dp).testTag("doc_note_btn_${docType.name}"),
           colors =
             FilterChipDefaults.filterChipColors(
               selectedContainerColor = BrandNavy,
               selectedLabelColor = Color.White,
               selectedLeadingIconColor = Color.White,
-            ),
-        )
-
-        FilterChip(
-          selected = isMissing,
-          onClick = { onToggleMissing(!isMissing) },
-          label = {
-            Text(
-              text = DocumentLegibility.MISSING.labelMr,
-              style = MaterialTheme.typography.labelMedium,
-            )
-          },
-          modifier = Modifier.weight(1f).height(48.dp).testTag("doc_missing_btn_${docType.name}"),
-          colors =
-            FilterChipDefaults.filterChipColors(
-              selectedContainerColor = BrandCrimson,
-              selectedLabelColor = Color.White,
             ),
         )
       }
@@ -1077,11 +1096,12 @@ private fun NoteCamUploadItem(
             .background(BannerIceBlue)
             .testTag("${slot.prefix}_preview_box"),
       ) {
-        AsyncImage(
-          model = photoUri,
+        RemoteAwarePhotoPreview(
+          photoUri = photoUri,
           contentDescription = slot.labelMr,
           modifier = Modifier.fillMaxSize(),
-          contentScale = ContentScale.Crop,
+          compact = false,
+          isMarathi = true,
         )
 
         IconButton(

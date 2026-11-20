@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -25,6 +26,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,27 +39,48 @@ import com.example.model.CustomerSurvey
 import com.example.model.SurveyCategory
 import com.example.model.VillageStats
 import com.example.ui.components.StatusPillBadge
+import com.example.ui.components.SyncErrorRetryBanner
 import com.example.ui.theme.BorderSubtle
 import com.example.ui.theme.CardWhite
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeDashboardScreen(
   stats: VillageStats,
   searchQuery: String,
   recentSurveys: List<CustomerSurvey>,
+  isCloudConfigured: Boolean = false,
+  isSyncing: Boolean = false,
+  syncErrorMessage: String? = null,
+  onRefresh: () -> Unit = {},
   onSearchChange: (String) -> Unit,
   onCustomerClick: (CustomerSurvey) -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+  PullToRefreshBox(
+    isRefreshing = isSyncing,
+    onRefresh = { if (isCloudConfigured) onRefresh() },
+    modifier = modifier.fillMaxSize(),
+    contentAlignment = Alignment.TopCenter,
+  ) {
     LazyColumn(
       modifier = Modifier.widthIn(max = 600.dp).fillMaxSize(),
       contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
       verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+      if (!syncErrorMessage.isNullOrBlank()) {
+        item {
+          SyncErrorRetryBanner(
+            errorMessage = syncErrorMessage,
+            isSyncing = isSyncing,
+            onRetry = onRefresh,
+          )
+        }
+      }
+
       item {
         Row(
           modifier = Modifier.fillMaxWidth(),
